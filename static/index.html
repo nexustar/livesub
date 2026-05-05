@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Livecap</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="controls">
+    <button id="toggle"><span class="icon">▶</span><span class="label">Start</span></button>
+    <select id="input-source" title="Audio source">
+      <option value="mic">🎤 Mic</option>
+      <option value="screen">📺 Tab</option>
+    </select>
+    <span id="status">idle</span>
+    <div id="vu" title="audio level">
+      <div id="vu-fill"></div>
+    </div>
+    <span class="spacer"></span>
+    <span class="badge" id="badge-mic" title="last audio peak (0-32767)">peak —</span>
+    <span class="badge" id="badge-asr" title="ASR session count">asr 0</span>
+    <span class="badge" id="badge-translate" title="translations completed / pending">tr 0/0</span>
+    <button id="settings-toggle" class="secondary">
+      <span class="icon">⚙</span><span class="label">Settings</span>
+    </button>
+    <button id="clear" class="secondary"><span class="label">Clear</span></button>
+  </div>
+
+  <div id="settings-panel" hidden>
+   <div class="settings-form">
+    <div class="row">
+      <label for="asr-backend">ASR backend</label>
+      <select id="asr-backend">
+        <option value="gemini">Gemini Live</option>
+        <option value="qwen">Qwen (local)</option>
+        <option value="voxtral">Voxtral (local)</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="translate-backend">Translation backend</label>
+      <select id="translate-backend">
+        <option value="gemini">Gemini</option>
+        <option value="claude">Claude</option>
+        <option value="none">None (transcript only)</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="source-lang">Source language</label>
+      <input id="source-lang" type="text" placeholder="auto" list="lang-options">
+      <datalist id="lang-options">
+        <option value="auto">
+        <option value="Japanese">
+        <option value="English">
+        <option value="Chinese">
+        <option value="Korean">
+        <option value="Spanish">
+      </datalist>
+    </div>
+    <div class="row">
+      <label for="target-lang">Target language</label>
+      <input id="target-lang" type="text" placeholder="Chinese (Simplified)">
+    </div>
+    <div class="row span2">
+      <label for="scene-seed">
+        Scene seed
+        <span class="muted">— a URL, topic, or short phrase; Claude (with web search) fills the two fields below</span>
+      </label>
+      <div class="hint-scene-row">
+        <input id="scene-seed" type="text"
+          placeholder="e.g. μ's Final Live concert; ICASSP 2026 keynote; FromSoftware Elden Ring stream">
+        <button id="hint-generate" class="secondary" type="button">✨ Generate</button>
+      </div>
+      <span id="hint-status" class="muted"></span>
+    </div>
+    <div class="row span2">
+      <label for="scene">Scene summary <span class="muted">(given to translator as background)</span></label>
+      <textarea id="scene" rows="3"
+        placeholder="e.g. Live concert by Japanese idol group μ's; use casual Chinese fan-slang and preserve idol terminology like 推し / ペンライト."></textarea>
+    </div>
+    <div class="row span2">
+      <label for="glossary">Glossary <span class="muted">(comma-separated terms, given to ASR as a soft prompt)</span></label>
+      <textarea id="glossary" rows="4"
+        placeholder="高坂穂乃果, 絢瀬絵里, μ's, アンコール, ペンライト, ..."></textarea>
+    </div>
+    <p class="hint">Settings persist locally. Changes apply on next Start.</p>
+   </div>
+  </div>
+
+  <div id="caption-stack">
+    <div id="caption-current" class="caption-zone live">
+      <div id="transcript" class="line transcript"></div>
+      <div id="translation" class="line translation"></div>
+    </div>
+    <div id="caption-prev" class="caption-zone prev" hidden>
+      <div id="prev-transcript" class="line transcript"></div>
+      <div id="prev-translation" class="line translation"></div>
+    </div>
+  </div>
+
+  <div id="history"></div>
+
+  <script src="/static/app.js" type="module"></script>
+</body>
+</html>
