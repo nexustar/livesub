@@ -30,7 +30,49 @@ ASR_MODEL = os.environ.get("GEMINI_ASR_MODEL", "gemini-2.5-flash-native-audio-la
 TRANSLATE_MODEL = os.environ.get("GEMINI_TRANSLATE_MODEL", "gemini-2.5-flash-lite")
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-CLAUDE_TRANSLATE_MODEL = os.environ.get("CLAUDE_TRANSLATE_MODEL", "claude-haiku-4-5")
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+DEEPSEEK_BASE_URL = os.environ.get(
+    "DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic"
+)
+
+# Translator backends that use the anthropic-python SDK. Claude variants
+# go to api.anthropic.com directly; DeepSeek goes through its anthropic-
+# compatible endpoint (same SDK, different base_url + api_key).
+ANTHROPIC_BACKENDS = {
+    "claude-haiku": {
+        "model": "claude-haiku-4-5",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "base_url": None,
+    },
+    "claude-sonnet": {
+        "model": "claude-sonnet-4-6",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "base_url": None,
+    },
+    "claude-opus": {
+        "model": "claude-opus-4-7",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "base_url": None,
+    },
+    "deepseek-flash": {
+        "model": os.environ.get("DEEPSEEK_TRANSLATE_MODEL", "deepseek-v4-flash"),
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "base_url": DEEPSEEK_BASE_URL,
+    },
+}
+
+# Disable extended thinking on every translation call. Claude variants
+# default to no-thinking already (opt-in only); DeepSeek-V4-flash defaults
+# to thinking ON, which inflates output tokens 10× / latency 5× and
+# sometimes exhausts the budget before any text is emitted. Passing
+# explicitly keeps behavior consistent across backends.
+ANTHROPIC_EXTRA_BODY = {"thinking": {"type": "disabled"}}
+
+# /api/hints (scene-seed → glossary research) is Claude-specific: the
+# prompt and Anthropic web_search tool are tied to Claude, and the prompt
+# was tuned against Haiku. Hardcoded; not user-selectable.
+HINTS_MODEL = "claude-haiku-4-5"
+
 DEFAULT_TARGET_LANG = "Chinese (Simplified)"
 HISTORY_PAIRS = 5
 
@@ -205,7 +247,7 @@ async def generate_hints(request: Request):
     )
     try:
         msg = await client.messages.create(
-            model=CLAUDE_TRANSLATE_MODEL,
+            model=HINTS_MODEL,
             max_tokens=1024,
             system=build_hints_system_prompt(source_lang),
             tools=[{
@@ -249,7 +291,7 @@ async def generate_hints(request: Request):
         "scene": scene,
         "glossary": glossary,
         "searches_used": searches_used,
-        "model": CLAUDE_TRANSLATE_MODEL,
+        "model": HINTS_MODEL,
     })
 
 
@@ -1269,9 +1311,10 @@ class Pipeline:
         return self.global_rev
 
     async def _maybe_trigger_partial(self):
-        """Possibly fire an intra-sentence partial translation. Only enabled
-        for Claude backend where the per-call cost is low enough to spam."""
-        if self.translate_backend != "claude":
+        """Possibly fire an intra-sentence partial translation. Only
+        enabled for anthropic-SDK backends (Claude variants, DeepSeek)
+        where the per-call cost is low enough to spam mid-sentence."""
+        if self.translate_backend not in ANTHROPIC_BACKENDS:
             return
         text_now = self.sentence_buffer.strip()
         if not text_now:
@@ -1482,12 +1525,14 @@ class Pipeline:
             )
             return
 
-        # Paired translation (Claude only, and only after the first sentence)
-        # gives Claude the chance to revise the previous translation in
-        # light of the new sentence. The first sentence has no prev so it
-        # falls through to the standard single-direction path.
+        # Paired translation: revise the previous sentence's translation
+        # in light of the new sentence. Enabled for all anthropic-SDK
+        # backends — Claude Haiku/Sonnet/Opus follow the [D]/[CURR]/[PREV]
+        # format natively; DeepSeek-V4-flash also passes a 10/10 format
+        # battery once thinking is disabled (see ANTHROPIC_BACKENDS extra_body).
+        # Requires at least one prior turn (no paired on first sentence).
         use_paired = (
-            self.translate_backend == "claude"
+            self.translate_backend in ANTHROPIC_BACKENDS
             and self.paired_prev_sid is not None
             and bool(self.paired_prev_dst)
         )
@@ -1614,7 +1659,7 @@ class Pipeline:
         # mutable dict so inner translator can stash first-chunk time
         metrics: dict = {"first_chunk_at": None}
         try:
-            if self.translate_backend == "claude":
+            if self.translate_backend in ANTHROPIC_BACKENDS:
                 full = await self._translate_one_claude(
                     sid, rev, text, history, is_partial, metrics
                 )
@@ -1731,14 +1776,23 @@ class Pipeline:
                 "message": "anthropic SDK not installed (uv add anthropic).",
             })
             return ""
+        backend_cfg = ANTHROPIC_BACKENDS.get(self.translate_backend)
+        if backend_cfg is None:
+            return ""  # validator should prevent this
+        model = backend_cfg["model"]
         if self.claude is None:
-            if not ANTHROPIC_API_KEY:
+            api_key_env = backend_cfg["api_key_env"]
+            api_key = os.environ.get(api_key_env)
+            if not api_key:
                 await self._safe_send_json({
                     "type": "error",
-                    "message": "ANTHROPIC_API_KEY env var not set.",
+                    "message": f"{api_key_env} env var not set.",
                 })
                 return ""
-            self.claude = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+            client_kwargs = {"api_key": api_key}
+            if backend_cfg.get("base_url"):
+                client_kwargs["base_url"] = backend_cfg["base_url"]
+            self.claude = anthropic.AsyncAnthropic(**client_kwargs)
 
         sys = build_translation_system_instruction(self.target_lang, self.source_lang, self.scene)
         # Claude messages: history goes as user/assistant turns, current
@@ -1764,11 +1818,12 @@ class Pipeline:
             full = []
             try:
                 async with self.claude.messages.stream(
-                    model=CLAUDE_TRANSLATE_MODEL,
+                    model=model,
                     max_tokens=512,
                     system=sys,
                     messages=messages,
                     temperature=0.2,
+                    extra_body=ANTHROPIC_EXTRA_BODY,
                 ) as stream:
                     async for chunk_text in stream.text_stream:
                         if chunk_text:
@@ -1820,6 +1875,10 @@ class Pipeline:
         once finalized. prev_revised is None when Claude opted to KEEP."""
         if anthropic is None or self.claude is None:
             return {"curr": "", "prev_revised": None}
+        backend_cfg = ANTHROPIC_BACKENDS.get(self.translate_backend)
+        if backend_cfg is None:
+            return {"curr": "", "prev_revised": None}
+        model = backend_cfg["model"]
 
         sys = build_paired_translation_system_instruction(
             self.target_lang, self.source_lang, self.scene
@@ -1842,11 +1901,12 @@ class Pipeline:
             parser = PairedStreamParser()
             try:
                 async with self.claude.messages.stream(
-                    model=CLAUDE_TRANSLATE_MODEL,
+                    model=model,
                     max_tokens=512,
                     system=sys,
                     messages=messages,
                     temperature=0.2,
+                    extra_body=ANTHROPIC_EXTRA_BODY,
                 ) as stream:
                     async for chunk_text in stream.text_stream:
                         if not chunk_text:
@@ -1944,7 +2004,8 @@ async def ws_endpoint(client_ws: WebSocket):
     if asr_backend not in ("gemini", "qwen", "voxtral"):
         asr_backend = "gemini"
     translate_backend = (config_msg.get("translate_backend") or "gemini").strip().lower()
-    if translate_backend not in ("gemini", "claude", "none"):
+    valid_translate = {"gemini", "none"} | set(ANTHROPIC_BACKENDS.keys())
+    if translate_backend not in valid_translate:
         translate_backend = "gemini"
     log.info(
         "config: asr=%s tr=%s src=%r dst=%r scene=%dch gloss=%dch",

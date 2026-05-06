@@ -11,7 +11,7 @@ but works for any language pair the underlying ASR + translator support.
         ▼
     [ ASR ]      ← Gemini Live | Qwen3-ASR (local) | Voxtral-4B (local)
         ▼
-    [ Translator ] ← Claude (paired-translation) | Gemini | none (passthrough)
+    [ Translator ] ← Claude Haiku/Sonnet/Opus (paired) | Gemini | DeepSeek | none
         ▼
    live captions + history (browser UI)
 ```
@@ -46,7 +46,8 @@ cd ~/lc/voxtral.c && ./download_model.sh && make mps   # mps on Apple Silicon
 ```bash
 # Cloud APIs (used when picking those backends in the UI)
 GEMINI_API_KEY=...
-ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_API_KEY=sk-ant-...      # Claude Haiku / Sonnet / Opus
+DEEPSEEK_API_KEY=sk-...           # DeepSeek (uses anthropic-compatible API)
 
 # Local ASR — only needed if you pick that backend in the UI
 QWEN_ASR_BIN=/path/to/qwen_asr
@@ -54,11 +55,6 @@ QWEN_ASR_MODEL_DIR=/path/to/qwen3-asr-0.6b
 
 VOXTRAL_BIN=/path/to/voxtral
 VOXTRAL_MODEL_DIR=/path/to/voxtral-realtime-4b
-
-# Optional: Qwen mode preset
-#   live (default) — livestream / TV / mixed audio
-#   clean          — clean continuous speech (podcast, lecture)
-QWEN_MODE=live
 ```
 
 ## Usage

@@ -37,7 +37,10 @@ targetLangInput.value = localStorage.getItem(LS_LANG) || "Chinese (Simplified)";
 sourceLangInput.value = localStorage.getItem(LS_SRC) || "auto";
 inputSourceSel.value = localStorage.getItem(LS_INPUT) || "mic";
 asrBackendSel.value = localStorage.getItem(LS_ASR) || "gemini";
-translateBackendSel.value = localStorage.getItem(LS_TR) || "gemini";
+// Migrate old single "claude" value (pre-variant split) → claude-haiku.
+let _savedTr = localStorage.getItem(LS_TR);
+if (_savedTr === "claude") _savedTr = "claude-haiku";
+translateBackendSel.value = _savedTr || "gemini";
 sceneSeedInput.value = localStorage.getItem(LS_SCENE_SEED) || "";
 sceneInput.value = localStorage.getItem(LS_SCENE) || "";
 glossaryInput.value = localStorage.getItem(LS_GLOSSARY) || "";
