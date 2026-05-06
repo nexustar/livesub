@@ -78,30 +78,6 @@ AUDIO_PREBUFFER_CHUNKS = 12
 # --repeat-penalty; our fork just has the flag as a no-op.
 QWEN_BIN = os.environ.get("QWEN_ASR_BIN", "qwen_asr")
 
-# Single dial for typical usage. Differs only in past-text conditioning.
-#
-#   live (default) — livestream / TV / music + speech mix:
-#       past_text=no
-#       Disables cross-chunk text feedback to prevent ABAB hallucination
-#       loops on weak / silent audio. The cross-segment dedup at dispatch
-#       cleans up qwen's chunk-overlap re-transcription that this enables.
-#
-#   clean — clean continuous speech (podcast, lecture, dictation):
-#       past_text=auto  (Qwen vLLM official default = yes for --stream)
-#       Past-text helps name / sentence continuity when audio is reliably
-#       clear. Risk of ABAB on quieter passages.
-QWEN_MODE = os.environ.get("QWEN_MODE", "live").strip().lower()
-_QWEN_PRESETS = {
-    "live":  {"past_text": "no"},
-    "clean": {"past_text": "auto"},
-}
-_qwen_preset = _QWEN_PRESETS.get(QWEN_MODE, _QWEN_PRESETS["live"])
-
-# Advanced override (rarely needed).
-QWEN_PAST_TEXT = os.environ.get(
-    "QWEN_PAST_TEXT", _qwen_preset["past_text"]
-).strip().lower()
-
 # voxtral.c (https://github.com/antirez/voxtral.c) — local C inference of
 # Mistral Voxtral Realtime 4B. Larger and more accurate than Qwen-0.6B but
 # 8.9 GB model and ~2.5x realtime on Apple M3 Max. No prompt / language /
@@ -771,15 +747,13 @@ class Pipeline:
             # generating from the conditioning context, which is the prompt).
             # Same class of bug as Whisper's initial_prompt echo.
             "--skip-silence",
-            # --past-text controls whether qwen feeds previously decoded
-            # text back as conditioning for the next chunk. Default (auto
-            # in --stream mode = yes) helps cross-chunk name continuity but
-            # is the source of the "decoder hallucinates from prompt /
-            # glossary on weak audio" feedback loop. Set QWEN_PAST_TEXT=no
-            # to break the loop at the cost of slight name-spelling drift.
+            # Feed previously decoded text back as conditioning for the
+            # next chunk — improves cross-chunk name / sentence continuity.
+            # Requires the patched fork of antirez/qwen-asr that fixes the
+            # weak-audio conditioning lock failure (whole-phrase repetition
+            # across many segments).
+            "--past-text", "yes",
         ]
-        if QWEN_PAST_TEXT in ("yes", "no", "auto"):
-            qwen_cmd.extend(["--past-text", QWEN_PAST_TEXT])
         # Repetition penalty was tried (our fork added a --repeat-penalty
         # flag) but turned out to make things worse: with past_text=no the
         # decoder doesn't rut, and any penalty > 1 introduces forced token
