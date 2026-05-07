@@ -261,8 +261,8 @@ function render() {
 // Promote a finalized sentence into the PREV zone. The sentence currently
 // in PREV (if any) gets pushed to history (no animation — user said the
 // prev → history transition can be instant). PREV gets the new content
-// with a slide-in-from-above animation looking like the LIVE card scrolled
-// down into the prev slot.
+// with a slide-up-from-below animation looking like the LIVE card (which
+// sits at the very bottom) scrolled up into the prev slot just above it.
 function promoteToPrev(s) {
   if (prevSlotSid !== null && prevSlotSid !== s.sid) {
     const oldPrev = sentences.get(prevSlotSid);
@@ -293,6 +293,8 @@ function appendToHistory(s) {
   dstDiv.className = "dst";
   dstDiv.textContent = s.dst.trim();
   item.append(srcDiv, dstDiv);
+  // #history is flex column-reverse: prepending puts the newest at the
+  // visual bottom (start of the reversed axis), older items push up.
   historyEl.prepend(item);
 }
 

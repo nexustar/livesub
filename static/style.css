@@ -212,15 +212,17 @@ body.settings-open #history { display: none; }
 
 /* ───────── Caption stack (current + prev) ───────── */
 
-/* Two zones, same size, stacked. Current = LIVE (blue tint + LIVE badge).
-   Prev = just-finalized (dim, no badge). When a sentence finalizes, prev
-   gets the new content with a slide-in-from-above animation, looking like
-   the LIVE card "scrolled down" into the prev slot. */
+/* Two zones, same size, stacked at the bottom of the viewport. Prev =
+   just-finalized (dim, no badge) on top; Current = LIVE (blue tint + LIVE
+   badge) at the very bottom. When a sentence finalizes, prev gets the new
+   content with a slide-up-from-below animation, looking like the LIVE
+   card "scrolled up" into the prev slot. */
 #caption-stack {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  overflow: hidden;   /* clip prev's translateY(-100%) start state during animation */
+  overflow: hidden;   /* clip prev's translateY(100%) start state during animation */
+  margin-top: auto;
 }
 
 .caption-zone {
@@ -257,16 +259,20 @@ body.settings-open #history { display: none; }
 
 .caption-zone[hidden] { display: none; }
 
-/* The slide-in: prev starts visually at current's position (translateY -100%
-   of its own height) and settles into its slot, while morphing from the
-   live blue gradient down to the dim prev background. Looks like a card
-   sliding down from above. */
+/* The slide-in: prev starts visually at current's position (translateY 100%
+   of its own height — i.e., one slot below, where the LIVE card sits) and
+   settles up into its slot, while morphing from the live blue gradient to
+   the dim prev background. Looks like a card sliding up from below. */
 .caption-zone.prev.entering {
+  /* z-index lifts prev above current during slide-in: prev starts at
+     translateY(100%) which lands it at current's position, and without
+     z-index current (next sibling, naturally on top) would obscure it. */
+  z-index: 2;
   animation: prev-shift-in 350ms cubic-bezier(0.2, 0.6, 0.2, 1);
 }
 @keyframes prev-shift-in {
   from {
-    transform: translateY(-100%);
+    transform: translateY(100%);
     background: linear-gradient(180deg, #0e1422 0%, #0c111c 100%);
   }
   to {
@@ -312,6 +318,13 @@ body[data-translate-backend="none"] .history-item .src {
   padding: 8px 16px 16px;
   background: #050505;
   box-shadow: inset 0 6px 8px -6px rgba(0, 0, 0, 0.7);
+  /* column-reverse anchors items to the bottom: with prepend(), the newest
+     item lands at the visual bottom (= start of the reversed axis), older
+     items push up. Default scrollTop=0 keeps the bottom (newest) visible;
+     scrolling up reveals older. Sidesteps the Chrome justify-content:
+     flex-end + overflow scrolling clip bug. */
+  display: flex;
+  flex-direction: column-reverse;
 }
 
 .history-item {
@@ -366,7 +379,7 @@ body[data-translate-backend="none"] .history-item .src {
 
 /* ───────── Responsive: medium height (251–400px) ───────── */
 
-@media (max-height: 400px) and (min-height: 251px) {
+@media (max-height: 400px) and (min-height: 201px) {
   #history { padding: 4px 14px 8px; }
   .history-item { padding: 5px 0; }
   .history-item .src { font-size: 11px; }
@@ -376,9 +389,9 @@ body[data-translate-backend="none"] .history-item .src {
   .translation { font-size: 21px; }
 }
 
-/* ───────── Responsive: subtitle mode (≤250px) ───────── */
+/* ───────── Responsive: subtitle mode (≤200px) ───────── */
 
-@media (max-height: 250px) {
+@media (max-height: 200px) {
   #controls { padding: 4px 10px; gap: 6px; }
   #controls .badge { display: none; }
   #controls #input-source { padding: 4px 6px; font-size: 12px; }
@@ -388,10 +401,10 @@ body[data-translate-backend="none"] .history-item .src {
   #clear::before { content: "✕"; line-height: 1; }
   #status { font-size: 12px; }
   #vu { width: 50px; height: 6px; }
-  .caption-zone { padding: 6px 12px; background: transparent; }
+  .caption-zone { padding: 9px 14px; background: transparent; }
   .caption-zone.live::before { display: none; }
-  .transcript { font-size: 12px; margin-bottom: 3px; }
-  .translation { font-size: 16px; }
+  .transcript { font-size: 13px; margin-bottom: 4px; }
+  .translation { font-size: 20px; }
   #history { display: none; }
   #settings-panel { padding: 6px 8px; }
   .settings-form { padding: 8px 10px; gap: 6px 10px; }

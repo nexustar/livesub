@@ -64,12 +64,15 @@ Open `http://localhost:8000`, pick **🎤 Mic** or **📺 Tab**, click
 icon) let you switch ASR / translation backends, source / target
 language, and feed Claude a "scene seed" to auto-generate a glossary.
 
-UI layout, top to bottom:
+UI layout, top to bottom (newest at the bottom — like a chat log):
 
 1. **Controls** — Start / Stop, source picker, level meter, status.
-2. **Live captions** — current sentence, blue tint + LIVE badge.
+2. **History** — older finalized sentences, smaller, recessed; oldest at
+   the top, newest at the bottom. Auto-scrolls to keep newest visible
+   unless you've scrolled up to read older content.
 3. **Prev caption** — just-finalized previous sentence, same size as
-   current but dim. Slides in when current finalizes; revisable by
-   paired-translation (brief blue flash).
-4. **History** — older finalized sentences, smaller, recessed.
+   current but dim. Slides up from the LIVE slot when current finalizes;
+   revisable by paired-translation (brief blue flash).
+4. **Live captions** — current sentence, blue tint + LIVE badge. Anchored
+   at the very bottom.
 
