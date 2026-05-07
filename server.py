@@ -23,7 +23,7 @@ except ImportError:
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("livecap")
+log = logging.getLogger("livesub")
 
 API_KEY = os.environ["GEMINI_API_KEY"]
 ASR_MODEL = os.environ.get("GEMINI_ASR_MODEL", "gemini-2.5-flash-native-audio-latest")

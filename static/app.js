@@ -24,14 +24,14 @@ const badgeMicEl = document.getElementById("badge-mic");
 const badgeAsrEl = document.getElementById("badge-asr");
 const badgeTranslateEl = document.getElementById("badge-translate");
 
-const LS_LANG = "livecap.targetLang";
-const LS_SRC = "livecap.sourceLang";
-const LS_INPUT = "livecap.inputSource";
-const LS_ASR = "livecap.asrBackend";
-const LS_TR = "livecap.translateBackend";
-const LS_SCENE_SEED = "livecap.sceneSeed";
-const LS_SCENE = "livecap.scene";
-const LS_GLOSSARY = "livecap.glossary";
+const LS_LANG = "livesub.targetLang";
+const LS_SRC = "livesub.sourceLang";
+const LS_INPUT = "livesub.inputSource";
+const LS_ASR = "livesub.asrBackend";
+const LS_TR = "livesub.translateBackend";
+const LS_SCENE_SEED = "livesub.sceneSeed";
+const LS_SCENE = "livesub.scene";
+const LS_GLOSSARY = "livesub.glossary";
 
 targetLangInput.value = localStorage.getItem(LS_LANG) || "Chinese (Simplified)";
 sourceLangInput.value = localStorage.getItem(LS_SRC) || "auto";

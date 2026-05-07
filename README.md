@@ -1,4 +1,4 @@
-# livecap
+# livesub
 
 Real-time bilingual live captions for whatever's playing in a browser
 tab or your microphone. Built for watching Japanese livestreams
@@ -21,7 +21,7 @@ but works for any language pair the underlying ASR + translator support.
 Prereqs: Python 3.11+, [`uv`](https://github.com/astral-sh/uv), and a Modern browser.
 
 ```bash
-git clone <repo> && cd livecap
+git clone <repo> && cd livesub
 cp .env.example .env       # edit
 uv sync
 uv run python server.py    # http://0.0.0.0:8000

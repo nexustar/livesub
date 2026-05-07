@@ -611,7 +611,7 @@ wheels = [
 ]
 
 [[package]]
-name = "livecap"
+name = "livesub"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
