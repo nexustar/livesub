@@ -1,6 +1,8 @@
 import asyncio
+import base64
 import codecs
 import collections
+import json
 import logging
 import os
 import re
@@ -21,6 +23,11 @@ try:
 except ImportError:
     anthropic = None
 
+try:
+    import websockets  # optional: only needed when asr_backend=openai-realtime
+except ImportError:
+    websockets = None
+
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("livesub")
@@ -31,6 +38,10 @@ TRANSLATE_MODEL = os.environ.get("GEMINI_TRANSLATE_MODEL", "gemini-2.5-flash-lit
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_REALTIME_MODEL = os.environ.get(
+    "OPENAI_REALTIME_MODEL", "gpt-realtime-whisper"
+)
 DEEPSEEK_BASE_URL = os.environ.get(
     "DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic"
 )
@@ -562,6 +573,33 @@ def chunk_peak(chunk: bytes) -> int:
     )
 
 
+def resample_16k_to_24k(pcm16: bytes) -> bytes:
+    """Stateless 3:2 linear-interpolation upsample for s16le PCM. Used by
+    the OpenAI Realtime backend, which rejects rates < 24kHz. The last
+    input sample is replicated to avoid needing cross-chunk state — at
+    40ms / 640-sample chunks the boundary artifact is one repeated sample,
+    inaudible to ASR. ~24K integer ops/sec at 25 chunks/sec, ≈1% CPU."""
+    import array
+    s = array.array("h")
+    s.frombytes(pcm16)
+    n = len(s)
+    if n < 2:
+        return pcm16
+    # Pad last sample so pair k=n_pairs-1 can still read s[2k+2].
+    last = s[-1]
+    n_pairs = n // 2
+    out = array.array("h")
+    out.extend([0] * (n_pairs * 3))
+    for k in range(n_pairs):
+        i0 = s[2 * k]
+        i1 = s[2 * k + 1]
+        i2 = s[2 * k + 2] if (2 * k + 2) < n else last
+        out[3 * k]     = i0
+        out[3 * k + 1] = (i0 + 2 * i1) // 3
+        out[3 * k + 2] = (2 * i1 + i2) // 3
+    return out.tobytes()
+
+
 class PairedStreamParser:
     """Incrementally parses Claude's [D][/D][CURR][/CURR][PREV][/PREV]
     paired-translation response. Streams CURR's inner text as soon as it
@@ -732,6 +770,8 @@ class Pipeline:
                 await self._qwen_asr_worker()
             elif self.asr_backend == "voxtral":
                 await self._voxtral_asr_worker()
+            elif self.asr_backend == "openai-realtime":
+                await self._openai_realtime_asr_worker()
             else:
                 while not self.stop_requested:
                     try:
@@ -1144,6 +1184,209 @@ class Pipeline:
                 proc.kill()
                 await proc.wait()
         log.info("voxtral subprocess exited (rc=%s)", proc.returncode)
+
+    # ----- OpenAI Realtime ASR backend (gpt-realtime-whisper) -----
+
+    async def _openai_realtime_asr_worker(self):
+        """Stream PCM to OpenAI's Realtime WebSocket in transcription-only
+        mode. Server VAD detects turn boundaries; deltas come back as
+        conversation.item.input_audio_transcription.delta events. No local
+        audio gate / prebuffer / idle flush — VAD handles silence."""
+        if websockets is None:
+            await self._safe_send_json({
+                "type": "error",
+                "message": "websockets package not installed",
+            })
+            return
+        if not OPENAI_API_KEY:
+            await self._safe_send_json({
+                "type": "error",
+                "message": "OPENAI_API_KEY env var not set.",
+            })
+            return
+
+        # `intent=transcription` is what makes this a transcription session
+        # rather than the default conversational realtime session — without
+        # it, the server rejects session.update with type=transcription. The
+        # specific model goes inside transcription.model in session.update.
+        url = "wss://api.openai.com/v1/realtime?intent=transcription"
+        headers = [("Authorization", f"Bearer {OPENAI_API_KEY}")]
+
+        # Outer reconnect loop. Any exception inside the WS context (network
+        # blip, server hangup, auth refresh failure) drops us back here; we
+        # reopen unless the parent worker asked us to stop.
+        while not self.stop_requested:
+            try:
+                # `additional_headers` is the websockets≥13 name; older
+                # releases used `extra_headers`. We pin a recent version.
+                async with websockets.connect(
+                    url, additional_headers=headers, max_size=2**24,
+                ) as ws:
+                    # Configure transcription-only session. OpenAI Realtime
+                    # rejects rates below 24kHz, so we upsample 16k → 24k in
+                    # `feed()` below before sending. Server VAD handles turn
+                    # boundaries; bump silence_duration_ms if you find the
+                    # model is cutting mid-clause.
+                    src = (self.source_lang or "").strip().lower()
+                    transcription_cfg: dict = {"model": OPENAI_REALTIME_MODEL}
+                    # OpenAI expects ISO-639-1 codes. Map the common names
+                    # from the UI's datalist; fall back to passing through
+                    # when the user typed something we don't know.
+                    iso = {
+                        "japanese": "ja", "english": "en", "chinese": "zh",
+                        "korean": "ko", "spanish": "es",
+                    }.get(src)
+                    if src and src != "auto":
+                        transcription_cfg["language"] = iso or src
+                    # NOTE: gpt-realtime-whisper rejects `turn_detection` —
+                    # it streams deltas continuously without turn boundaries.
+                    # livecap's own punctuation/length-based sentence cutting
+                    # in `_on_transcript_chunk` handles segmentation; idle
+                    # flush is the fallback when no punctuation appears.
+                    await ws.send(json.dumps({
+                        "type": "session.update",
+                        "session": {
+                            "type": "transcription",
+                            "audio": {
+                                "input": {
+                                    "format": {
+                                        "type": "audio/pcm",
+                                        "rate": 24000,
+                                    },
+                                    "transcription": transcription_cfg,
+                                }
+                            },
+                        },
+                    }))
+                    log.info(
+                        "openai-realtime: connected, model=%s lang=%s",
+                        OPENAI_REALTIME_MODEL,
+                        transcription_cfg.get("language") or "auto",
+                    )
+                    await self._safe_send_json(
+                        {"type": "asr_session", "state": "open"}
+                    )
+                    if self.asr_started_at == 0.0:
+                        self.asr_started_at = time.monotonic()
+
+                    window_peak = 0
+                    window_count = 0
+
+                    async def feed():
+                        nonlocal window_peak, window_count
+                        while True:
+                            chunk = await self.audio_queue.get()
+                            if chunk is None:
+                                # Mark end-of-stream so the server can flush
+                                # any pending transcription. Don't close the
+                                # WS here — let the recv loop's break exit.
+                                try:
+                                    await ws.send(json.dumps(
+                                        {"type": "input_audio_buffer.commit"}
+                                    ))
+                                except Exception:
+                                    pass
+                                return
+                            self.stats_chunks += 1
+                            self.stats_bytes += len(chunk)
+                            self.chunks_fed_to_asr += 1  # no audio gate; server VAD handles it
+                            peak = chunk_peak(chunk)
+                            if peak > window_peak:
+                                window_peak = peak
+                            window_count += 1
+                            if window_count >= 12:
+                                await self._safe_send_json({
+                                    "type": "audio_stats",
+                                    "peak": window_peak,
+                                    "chunks_per_sec": int(window_count / 0.5),
+                                })
+                                window_peak = 0
+                                window_count = 0
+                            if (
+                                self.stats_chunks in (1, 25, 100)
+                                or self.stats_chunks % 250 == 0
+                            ):
+                                elapsed = time.monotonic() - self.asr_started_at
+                                audio_fed_sec = self.chunks_fed_to_asr * 0.04
+                                rt = audio_fed_sec / elapsed if elapsed > 0 else 0
+                                queue_lag = self.audio_queue.qsize() * 0.04
+                                log.info(
+                                    "openai-realtime perf chunks=%d audio=%.1fs "
+                                    "elapsed=%.1fs realtime=%.2fx queue_lag=%.1fs",
+                                    self.stats_chunks, audio_fed_sec,
+                                    elapsed, rt, queue_lag,
+                                )
+                            # Upsample 16k → 24k for OpenAI's minimum rate.
+                            chunk_24k = resample_16k_to_24k(chunk)
+                            await ws.send(json.dumps({
+                                "type": "input_audio_buffer.append",
+                                "audio": base64.b64encode(chunk_24k).decode("ascii"),
+                            }))
+
+                    async def receive():
+                        async for raw in ws:
+                            try:
+                                evt = json.loads(raw)
+                            except json.JSONDecodeError:
+                                log.warning("openai-realtime: non-JSON frame: %r", raw[:120])
+                                continue
+                            t = evt.get("type", "")
+                            if t == "conversation.item.input_audio_transcription.delta":
+                                delta = evt.get("delta") or ""
+                                if delta:
+                                    await self._on_transcript_chunk(delta)
+                            elif t == "conversation.item.input_audio_transcription.completed":
+                                # Server VAD says this turn ended. Flush any
+                                # buffered text as a finalized sentence so
+                                # paired translation has a clean boundary.
+                                await self._finalize_pending_sentence()
+                            elif t == "input_audio_buffer.speech_stopped":
+                                # Optional signal — we already act on
+                                # transcription.completed. Logged for diagnosis.
+                                pass
+                            elif t == "error":
+                                err = evt.get("error", {})
+                                log.error(
+                                    "openai-realtime error: %s — %s",
+                                    err.get("type"), err.get("message"),
+                                )
+                                await self._safe_send_json({
+                                    "type": "error",
+                                    "message": (
+                                        f"OpenAI Realtime: {err.get('message') or err}"
+                                    ),
+                                })
+                            elif t in ("session.created", "session.updated"):
+                                # Confirm setup; nothing to do.
+                                pass
+
+                    feed_task = asyncio.create_task(feed())
+                    recv_task = asyncio.create_task(receive())
+                    done, pending = await asyncio.wait(
+                        {feed_task, recv_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for t in pending:
+                        t.cancel()
+                        try:
+                            await t
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                    # Surface any unexpected exception from the completed task.
+                    for t in done:
+                        exc = t.exception()
+                        if exc is not None:
+                            raise exc
+                    # If feed exited because audio_queue got None (client
+                    # disconnect / stop), break out of the outer reconnect loop.
+                    if self.stop_requested:
+                        return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("openai-realtime: session crashed; will reopen")
+                await asyncio.sleep(0.5)
+                continue
 
     async def _run_one_asr_session(self):
         config = self._build_asr_config()
@@ -1822,8 +2065,8 @@ class Pipeline:
                     max_tokens=512,
                     system=sys,
                     messages=messages,
-                    temperature=0.2,
                     extra_body=ANTHROPIC_EXTRA_BODY,
+                    cache_control={"type": "ephemeral"},
                 ) as stream:
                     async for chunk_text in stream.text_stream:
                         if chunk_text:
@@ -1905,8 +2148,8 @@ class Pipeline:
                     max_tokens=512,
                     system=sys,
                     messages=messages,
-                    temperature=0.2,
                     extra_body=ANTHROPIC_EXTRA_BODY,
+                    cache_control={"type": "ephemeral"},
                 ) as stream:
                     async for chunk_text in stream.text_stream:
                         if not chunk_text:
@@ -2001,7 +2244,7 @@ async def ws_endpoint(client_ws: WebSocket):
     scene = (config_msg.get("scene") or "").strip()
     glossary = (config_msg.get("glossary") or "").strip()
     asr_backend = (config_msg.get("asr_backend") or "gemini").strip().lower()
-    if asr_backend not in ("gemini", "qwen", "voxtral"):
+    if asr_backend not in ("gemini", "qwen", "voxtral", "openai-realtime"):
         asr_backend = "gemini"
     translate_backend = (config_msg.get("translate_backend") or "gemini").strip().lower()
     valid_translate = {"gemini", "none"} | set(ANTHROPIC_BACKENDS.keys())

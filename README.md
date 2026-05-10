@@ -9,7 +9,7 @@ but works for any language pair the underlying ASR + translator support.
 [browser tab audio | mic]
         │  16 kHz s16le, 40 ms chunks
         ▼
-    [ ASR ]      ← Gemini Live | Qwen3-ASR (local) | Voxtral-4B (local)
+    [ ASR ]      ← Gemini Live | OpenAI Realtime | Qwen3-ASR (local) | Voxtral-4B (local)
         ▼
     [ Translator ] ← Claude Haiku/Sonnet/Opus (paired) | Gemini | DeepSeek | none
         ▼
@@ -48,6 +48,7 @@ cd ~/lc/voxtral.c && ./download_model.sh && make mps   # mps on Apple Silicon
 GEMINI_API_KEY=...
 ANTHROPIC_API_KEY=sk-ant-...      # Claude Haiku / Sonnet / Opus
 DEEPSEEK_API_KEY=sk-...           # DeepSeek (uses anthropic-compatible API)
+OPENAI_API_KEY=sk-...             # OpenAI Realtime ASR (gpt-realtime-whisper)
 
 # Local ASR — only needed if you pick that backend in the UI
 QWEN_ASR_BIN=/path/to/qwen_asr
