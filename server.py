@@ -573,33 +573,6 @@ def chunk_peak(chunk: bytes) -> int:
     )
 
 
-def resample_16k_to_24k(pcm16: bytes) -> bytes:
-    """Stateless 3:2 linear-interpolation upsample for s16le PCM. Used by
-    the OpenAI Realtime backend, which rejects rates < 24kHz. The last
-    input sample is replicated to avoid needing cross-chunk state — at
-    40ms / 640-sample chunks the boundary artifact is one repeated sample,
-    inaudible to ASR. ~24K integer ops/sec at 25 chunks/sec, ≈1% CPU."""
-    import array
-    s = array.array("h")
-    s.frombytes(pcm16)
-    n = len(s)
-    if n < 2:
-        return pcm16
-    # Pad last sample so pair k=n_pairs-1 can still read s[2k+2].
-    last = s[-1]
-    n_pairs = n // 2
-    out = array.array("h")
-    out.extend([0] * (n_pairs * 3))
-    for k in range(n_pairs):
-        i0 = s[2 * k]
-        i1 = s[2 * k + 1]
-        i2 = s[2 * k + 2] if (2 * k + 2) < n else last
-        out[3 * k]     = i0
-        out[3 * k + 1] = (i0 + 2 * i1) // 3
-        out[3 * k + 2] = (2 * i1 + i2) // 3
-    return out.tobytes()
-
-
 class PairedStreamParser:
     """Incrementally parses Claude's [D][/D][CURR][/CURR][PREV][/PREV]
     paired-translation response. Streams CURR's inner text as soon as it
@@ -1316,11 +1289,11 @@ class Pipeline:
                                     self.stats_chunks, audio_fed_sec,
                                     elapsed, rt, queue_lag,
                                 )
-                            # Upsample 16k → 24k for OpenAI's minimum rate.
-                            chunk_24k = resample_16k_to_24k(chunk)
+                            # Browser worklet emits 24kHz when this backend
+                            # is selected — no server-side resample needed.
                             await ws.send(json.dumps({
                                 "type": "input_audio_buffer.append",
-                                "audio": base64.b64encode(chunk_24k).decode("ascii"),
+                                "audio": base64.b64encode(chunk).decode("ascii"),
                             }))
 
                     async def receive():
@@ -2066,6 +2039,13 @@ class Pipeline:
                     system=sys,
                     messages=messages,
                     extra_body=ANTHROPIC_EXTRA_BODY,
+                    # Auto-cache the last cacheable block. Within a session
+                    # `sys` is fixed and `messages` grows by appending — every
+                    # request reuses the prior request's cached prefix
+                    # (system + history pairs), only the new turn pays full
+                    # input price. Min cacheable prefix: 4096 tokens on Opus
+                    # 4.7 / Haiku 4.5, 2048 on Sonnet 4.6 — short prompts
+                    # silently no-op until the prefix grows past that.
                     cache_control={"type": "ephemeral"},
                 ) as stream:
                     async for chunk_text in stream.text_stream:

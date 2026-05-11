@@ -413,18 +413,25 @@ async function start() {
       });
     });
 
-    // Try to get a 16kHz context; some setups (especially getDisplayMedia) may
-    // refuse and fall back to native (typically 48kHz). The worklet handles
-    // either case via in-process resampling.
+    // Each ASR backend has its own preferred input rate. OpenAI Realtime's
+    // minimum is 24kHz; everyone else (Gemini Live, Qwen, Voxtral) wants
+    // 16kHz natively. Sending the right rate from the browser avoids
+    // server-side resampling and — more importantly — gives 24kHz-only
+    // backends real high-frequency content from the mic instead of fake
+    // interpolated upsampling.
+    const targetRate =
+      (asrBackendSel.value === "openai-realtime") ? 24000 : 16000;
     try {
-      audioCtx = new AudioContext({ sampleRate: 16000 });
+      audioCtx = new AudioContext({ sampleRate: targetRate });
     } catch {
       audioCtx = new AudioContext();
     }
-    console.log(`AudioContext: ${audioCtx.sampleRate}Hz (worklet will resample to 16000Hz)`);
+    console.log(`AudioContext: ${audioCtx.sampleRate}Hz (worklet will resample to ${targetRate}Hz)`);
     await audioCtx.audioWorklet.addModule("/static/pcm-worklet.js");
     sourceNode = audioCtx.createMediaStreamSource(stream);
-    workletNode = new AudioWorkletNode(audioCtx, "pcm-worklet");
+    workletNode = new AudioWorkletNode(audioCtx, "pcm-worklet", {
+      processorOptions: { targetRate },
+    });
     sourceNode.connect(workletNode);
     muteGain = audioCtx.createGain();
     muteGain.gain.value = 0;

@@ -1,12 +1,14 @@
-// Resamples whatever the AudioContext is running at down to 16kHz mono
-// PCM (s16le) and posts 40ms chunks (= 640 output samples) to the main thread.
-// Naive decimation: not anti-aliased, but more than good enough for speech ASR.
+// Resamples whatever the AudioContext is running at down to a target rate
+// (default 16kHz; OpenAI Realtime backend asks for 24kHz) and posts 40ms
+// chunks of mono s16le PCM to the main thread. Naive decimation: not
+// anti-aliased, but more than good enough for speech ASR.
 class PCMWorklet extends AudioWorkletProcessor {
-  constructor() {
+  constructor(options) {
     super();
-    this.targetRate = 16000;
+    const opts = options?.processorOptions || {};
+    this.targetRate = opts.targetRate || 16000;
     this.ratio = sampleRate / this.targetRate; // input samples per output sample
-    this.targetSize = 640; // 40 ms at 16 kHz
+    this.targetSize = Math.round(this.targetRate * 0.04); // 40ms worth
     this.outBuffer = new Float32Array(this.targetSize);
     this.outFill = 0;
     this.acc = 0; // fractional accumulator carried across process calls
