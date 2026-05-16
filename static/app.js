@@ -23,6 +23,7 @@ const vuFillEl = document.getElementById("vu-fill");
 const badgeMicEl = document.getElementById("badge-mic");
 const badgeAsrEl = document.getElementById("badge-asr");
 const badgeTranslateEl = document.getElementById("badge-translate");
+const debugModeInput = document.getElementById("debug-mode");
 
 const LS_LANG = "livesub.targetLang";
 const LS_SRC = "livesub.sourceLang";
@@ -32,6 +33,7 @@ const LS_TR = "livesub.translateBackend";
 const LS_SCENE_SEED = "livesub.sceneSeed";
 const LS_SCENE = "livesub.scene";
 const LS_GLOSSARY = "livesub.glossary";
+const LS_DEBUG = "livesub.debugMode";
 
 targetLangInput.value = localStorage.getItem(LS_LANG) || "Chinese (Simplified)";
 sourceLangInput.value = localStorage.getItem(LS_SRC) || "auto";
@@ -39,6 +41,17 @@ inputSourceSel.value = localStorage.getItem(LS_INPUT) || "mic";
 sceneSeedInput.value = localStorage.getItem(LS_SCENE_SEED) || "";
 sceneInput.value = localStorage.getItem(LS_SCENE) || "";
 glossaryInput.value = localStorage.getItem(LS_GLOSSARY) || "";
+// Debug mode shows the diagnostic badges (mic peak / asr session / tr
+// counter). Off by default; toggling it just adds/removes a body class
+// since CSS does the work (.debug-mode reveals .badge).
+const debugOn = localStorage.getItem(LS_DEBUG) === "1";
+debugModeInput.checked = debugOn;
+document.body.classList.toggle("debug-mode", debugOn);
+debugModeInput.addEventListener("change", () => {
+  const on = debugModeInput.checked;
+  document.body.classList.toggle("debug-mode", on);
+  localStorage.setItem(LS_DEBUG, on ? "1" : "0");
+});
 
 // Backend dropdowns are populated dynamically from /api/backends so the user
 // only sees options that are actually configured server-side (have an API

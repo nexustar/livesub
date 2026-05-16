@@ -5,7 +5,13 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   background: #0a0a0a;
   color: #f5f5f5;
+  /* 100vh on iOS Safari returns the "large viewport" — the height with URL
+     bar / tab bar hidden — so on first load the body extends below the
+     actually-visible area and the bottom of the settings panel gets clipped
+     behind the iOS chrome. 100dvh tracks the chrome state dynamically.
+     100vh kept as a fallback for browsers that don't support dvh. */
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -108,6 +114,10 @@ button.secondary:hover { background: #1a1a1a; color: #ccc; }
 .badge.active { color: #f5f5f5; border-color: #2563eb; }
 .badge.warn   { color: #fbbf24; border-color: #b45309; }
 .badge.error  { color: #ef4444; border-color: #991b1b; }
+/* Diagnostic badges (mic peak / asr session / translation counter) are
+   hidden by default — useful for development but visual noise for most
+   users. Settings → "Debug mode" toggles body.debug-mode to reveal them. */
+body:not(.debug-mode) #controls .badge { display: none; }
 
 /* ───────── Settings panel (two-column grid) ───────── */
 
@@ -209,6 +219,16 @@ body.settings-open #history { display: none; }
 #hint-status.ok { color: #16a34a; }
 #hint-status.err { color: #ef4444; }
 #hint-status.busy { color: #fbbf24; }
+
+.checkbox-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: #ddd;
+  cursor: pointer;
+}
+.checkbox-row input[type="checkbox"] { cursor: pointer; }
 
 /* ───────── Caption stack (current + prev) ───────── */
 
@@ -393,12 +413,7 @@ body[data-translate-backend="none"] .history-item .src {
 
 @media (max-height: 200px) {
   #controls { padding: 4px 10px; gap: 6px; }
-  #controls .badge { display: none; }
   #controls #input-source { padding: 4px 6px; font-size: 12px; }
-  /* Collapse to icon only — keep buttons at their default size. */
-  #toggle .label, #settings-toggle .label, #clear .label { display: none; }
-  /* Clear has no icon span; substitute one via ::before. */
-  #clear::before { content: "✕"; line-height: 1; }
   #status { font-size: 12px; }
   #vu { width: 50px; height: 6px; }
   .caption-zone { padding: 9px 14px; background: transparent; }
@@ -417,4 +432,16 @@ body[data-translate-backend="none"] .history-item .src {
   .settings-form .row.span2 { grid-column: 1; }
   #controls #input-source { display: none; }
   #controls .badge { font-size: 10px; padding: 2px 5px; }
+}
+
+/* ───────── Responsive: icon-only toolbar (narrow OR very short) ───────── */
+
+/* On narrow screens (real iOS Safari + "Larger Text" makes "Settings"/
+   "Clear" labels push controls off the viewport) AND on very short
+   screens (subtitle mode), collapse Start / Settings / Clear buttons to
+   their leading icon. */
+@media (max-width: 600px), (max-height: 200px) {
+  #toggle .label,
+  #settings-toggle .label,
+  #clear .label { display: none; }
 }

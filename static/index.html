@@ -24,7 +24,7 @@
     <button id="settings-toggle" class="secondary">
       <span class="icon">⚙</span><span class="label">Settings</span>
     </button>
-    <button id="clear" class="secondary"><span class="label">Clear</span></button>
+    <button id="clear" class="secondary"><span class="icon">✕</span><span class="label">Clear</span></button>
   </div>
 
   <div id="settings-panel" hidden>
@@ -78,6 +78,12 @@
       <label for="glossary">Glossary <span class="muted">(comma-separated terms, given to ASR as a soft prompt)</span></label>
       <textarea id="glossary" rows="4"
         placeholder="高坂穂乃果, 絢瀬絵里, μ's, アンコール, ペンライト, ..."></textarea>
+    </div>
+    <div class="row span2">
+      <label class="checkbox-row">
+        <input id="debug-mode" type="checkbox">
+        Debug mode <span class="muted">— show mic peak / ASR session / translation counter badges in the toolbar</span>
+      </label>
     </div>
     <p class="hint">Settings persist locally. Changes apply on next Start.</p>
    </div>
