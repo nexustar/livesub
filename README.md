@@ -44,11 +44,12 @@ cd ~/lc/voxtral.c && ./download_model.sh && make mps   # mps on Apple Silicon
 ## `.env`
 
 ```bash
-# Cloud APIs (used when picking those backends in the UI)
+# Cloud APIs (set the ones you want; backends without keys are hidden in the UI)
 GEMINI_API_KEY=...
 ANTHROPIC_API_KEY=sk-ant-...      # Claude Haiku / Sonnet / Opus
 DEEPSEEK_API_KEY=sk-...           # DeepSeek (uses anthropic-compatible API)
-OPENAI_API_KEY=sk-...             # OpenAI Realtime ASR (gpt-realtime-whisper)
+OPENAI_API_KEY=sk-...             # OpenAI Realtime ASR + custom OpenAI-SDK
+                                  # translate backends declared in livesub.toml
 
 # Local ASR — only needed if you pick that backend in the UI
 QWEN_ASR_BIN=/path/to/qwen_asr
@@ -57,6 +58,13 @@ QWEN_ASR_MODEL_DIR=/path/to/qwen3-asr-0.6b
 VOXTRAL_BIN=/path/to/voxtral
 VOXTRAL_MODEL_DIR=/path/to/voxtral-realtime-4b
 ```
+
+## Custom translate backends (optional)
+
+Copy `livesub.toml.example` to `livesub.toml` to add your own translation
+backends — local LLMs via Ollama/lm-studio, routing services like
+OpenRouter, or OpenAI directly. The file is optional; without it you get
+the built-ins (Claude variants, DeepSeek, Gemini, none).
 
 ## Usage
 

@@ -36,14 +36,56 @@ const LS_GLOSSARY = "livesub.glossary";
 targetLangInput.value = localStorage.getItem(LS_LANG) || "Chinese (Simplified)";
 sourceLangInput.value = localStorage.getItem(LS_SRC) || "auto";
 inputSourceSel.value = localStorage.getItem(LS_INPUT) || "mic";
-asrBackendSel.value = localStorage.getItem(LS_ASR) || "gemini";
-// Migrate old single "claude" value (pre-variant split) → claude-haiku.
-let _savedTr = localStorage.getItem(LS_TR);
-if (_savedTr === "claude") _savedTr = "claude-haiku";
-translateBackendSel.value = _savedTr || "gemini";
 sceneSeedInput.value = localStorage.getItem(LS_SCENE_SEED) || "";
 sceneInput.value = localStorage.getItem(LS_SCENE) || "";
 glossaryInput.value = localStorage.getItem(LS_GLOSSARY) || "";
+
+// Backend dropdowns are populated dynamically from /api/backends so the user
+// only sees options that are actually configured server-side (have an API
+// key or a local binary). Saved choice restored if still present; otherwise
+// the first available wins (browser-default for an empty value).
+function populateBackendSelect(sel, items, savedValue) {
+  sel.innerHTML = "";
+  if (items.length === 0) {
+    // No backend configured for this kind on the server side. Show a clear
+    // disabled placeholder so the user sees they need to set a key/binary,
+    // instead of getting a mysterious WS-close error after pressing Start.
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "(none configured)";
+    opt.disabled = true;
+    sel.appendChild(opt);
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  for (const it of items) {
+    const opt = document.createElement("option");
+    opt.value = it.id;
+    opt.textContent = it.label;
+    sel.appendChild(opt);
+  }
+  if (savedValue && [...sel.options].some(o => o.value === savedValue)) {
+    sel.value = savedValue;
+  }
+}
+
+async function loadBackends() {
+  let data;
+  try {
+    const res = await fetch("/api/backends");
+    data = await res.json();
+  } catch (e) {
+    console.error("failed to fetch /api/backends", e);
+    return;
+  }
+  populateBackendSelect(asrBackendSel, data.asr || [], localStorage.getItem(LS_ASR));
+  // Migrate old single "claude" value (pre-variant split) → claude-haiku.
+  let savedTr = localStorage.getItem(LS_TR);
+  if (savedTr === "claude") savedTr = "claude-haiku";
+  populateBackendSelect(translateBackendSel, data.translate || [], savedTr);
+}
+loadBackends();
 
 sceneSeedInput.addEventListener("input", () => {
   localStorage.setItem(LS_SCENE_SEED, sceneSeedInput.value);

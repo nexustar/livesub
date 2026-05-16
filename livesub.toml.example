@@ -1,0 +1,45 @@
+# Optional config: define custom translation backends in addition to the
+# built-ins (Claude Haiku/Sonnet/Opus, DeepSeek Flash, Gemini, none).
+#
+# Copy this to `livesub.toml` (same directory as .env) and edit. The file
+# is optional — without it, only built-ins show up. Restart the server
+# after editing.
+#
+# Schema for each [[translate]] entry:
+#   id           required  unique identifier (used in WS config + localStorage)
+#   label        required  display name in the dropdown
+#   sdk          required  "anthropic" or "openai" — picks the client library
+#   model        required  model id passed to the SDK
+#   api_key_env  optional  env var to read for the API key. Omit for keyless
+#                          backends (ollama, lm-studio without auth).
+#   base_url     optional  override the SDK's default endpoint. Required for
+#                          local OpenAI-compat servers and routing services.
+#
+# Tip: keep secrets in .env; this file only references env var names.
+
+# Local LLM via Ollama (offline-capable). Pull a model first:
+#   ollama pull qwen2.5:14b
+[[translate]]
+id = "local-qwen"
+label = "Local Qwen 14B (Ollama)"
+sdk = "openai"
+model = "qwen2.5:14b"
+base_url = "http://localhost:11434/v1"
+# api_key_env intentionally omitted — Ollama doesn't require auth
+
+# OpenAI direct (uses OPENAI_API_KEY from .env)
+[[translate]]
+id = "gpt-5-mini"
+label = "GPT-5 Mini"
+sdk = "openai"
+model = "gpt-5-mini"
+api_key_env = "OPENAI_API_KEY"
+
+# Routing service example (OpenRouter speaks OpenAI protocol)
+# [[translate]]
+# id = "openrouter-sonnet"
+# label = "Sonnet via OpenRouter"
+# sdk = "openai"
+# model = "anthropic/claude-sonnet-4-6"
+# base_url = "https://openrouter.ai/api/v1"
+# api_key_env = "OPENROUTER_API_KEY"

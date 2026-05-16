@@ -19,9 +19,14 @@ from google import genai
 from google.genai import types
 
 try:
-    import anthropic  # optional: only needed when translate_backend=claude
+    import anthropic  # optional: only needed when translate sdk=anthropic
 except ImportError:
     anthropic = None
+
+try:
+    import openai  # optional: only needed when translate sdk=openai
+except ImportError:
+    openai = None
 
 try:
     import websockets  # optional: only needed when asr_backend=openai-realtime
@@ -32,7 +37,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("livesub")
 
-API_KEY = os.environ["GEMINI_API_KEY"]
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 ASR_MODEL = os.environ.get("GEMINI_ASR_MODEL", "gemini-2.5-flash-native-audio-latest")
 TRANSLATE_MODEL = os.environ.get("GEMINI_TRANSLATE_MODEL", "gemini-2.5-flash-lite")
 
@@ -46,31 +51,107 @@ DEEPSEEK_BASE_URL = os.environ.get(
     "DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic"
 )
 
-# Translator backends that use the anthropic-python SDK. Claude variants
-# go to api.anthropic.com directly; DeepSeek goes through its anthropic-
-# compatible endpoint (same SDK, different base_url + api_key).
-ANTHROPIC_BACKENDS = {
-    "claude-haiku": {
-        "model": "claude-haiku-4-5",
-        "api_key_env": "ANTHROPIC_API_KEY",
-        "base_url": None,
-    },
-    "claude-sonnet": {
-        "model": "claude-sonnet-4-6",
-        "api_key_env": "ANTHROPIC_API_KEY",
-        "base_url": None,
-    },
-    "claude-opus": {
-        "model": "claude-opus-4-7",
-        "api_key_env": "ANTHROPIC_API_KEY",
-        "base_url": None,
-    },
-    "deepseek-flash": {
-        "model": os.environ.get("DEEPSEEK_TRANSLATE_MODEL", "deepseek-v4-flash"),
-        "api_key_env": "DEEPSEEK_API_KEY",
-        "base_url": DEEPSEEK_BASE_URL,
-    },
-}
+# Translator backends. Single source of truth: what shows up in the UI
+# dropdown, which SDK to talk to it with, what model, where to point. Add
+# new built-ins here; users add their own via livesub.toml (same schema).
+#
+# Fields:
+#   id           — stable identifier used in WS config and localStorage
+#   label        — display name in the dropdown
+#   sdk          — "anthropic" | "openai" | "gemini" | "none"
+#   model        — model id passed to the SDK; ignored for "gemini"/"none"
+#   api_key_env  — env var that must be set for this backend to appear
+#                  (omit for keyless backends — local OpenAI-compat servers,
+#                   "none", "gemini" which has its own module-level client)
+#   base_url     — optional. Overrides the SDK's default endpoint. Required
+#                  for OpenAI-compat servers (ollama, lm-studio, OpenRouter,
+#                  DeepSeek's anthropic-compat).
+TRANSLATE_BACKENDS_BUILTIN: list[dict] = [
+    {"id": "claude-haiku",   "label": "Claude Haiku",
+     "sdk": "anthropic", "model": "claude-haiku-4-5",
+     "api_key_env": "ANTHROPIC_API_KEY"},
+    {"id": "claude-sonnet",  "label": "Claude Sonnet",
+     "sdk": "anthropic", "model": "claude-sonnet-4-6",
+     "api_key_env": "ANTHROPIC_API_KEY"},
+    {"id": "claude-opus",    "label": "Claude Opus",
+     "sdk": "anthropic", "model": "claude-opus-4-7",
+     "api_key_env": "ANTHROPIC_API_KEY"},
+    {"id": "deepseek-flash", "label": "DeepSeek Flash",
+     "sdk": "anthropic",
+     "model": os.environ.get("DEEPSEEK_TRANSLATE_MODEL", "deepseek-v4-flash"),
+     "api_key_env": "DEEPSEEK_API_KEY",
+     "base_url": DEEPSEEK_BASE_URL},
+    {"id": "gemini", "label": "Gemini",
+     "sdk": "gemini", "model": None,
+     "api_key_env": "GEMINI_API_KEY"},
+    {"id": "none", "label": "None (transcript only)",
+     "sdk": "none", "model": None},
+]
+
+
+def _load_custom_translate_backends() -> list[dict]:
+    """Read user-defined backends from livesub.toml (next to .env / cwd) if
+    present. Skipped silently when the file doesn't exist. Each entry must
+    have id/label/sdk/model; api_key_env and base_url are optional.
+
+    Example livesub.toml:
+        [[translate]]
+        id = "local-qwen"
+        label = "Local Qwen 14B (Ollama)"
+        sdk = "openai"
+        model = "qwen2.5:14b"
+        base_url = "http://localhost:11434/v1"
+        # api_key_env omitted — ollama doesn't require auth by default
+    """
+    cfg_path = Path("livesub.toml")
+    if not cfg_path.exists():
+        return []
+    try:
+        import tomllib
+        data = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        log.error("livesub.toml parse failed: %s", e)
+        return []
+    out: list[dict] = []
+    for entry in (data.get("translate") or []):
+        if not isinstance(entry, dict):
+            continue
+        missing = [k for k in ("id", "label", "sdk", "model") if k not in entry]
+        if missing:
+            log.warning(
+                "livesub.toml: skipping entry missing %s: %r", missing, entry,
+            )
+            continue
+        if entry["sdk"] not in ("anthropic", "openai"):
+            log.warning(
+                "livesub.toml: sdk must be 'anthropic' or 'openai', got %r (entry %r)",
+                entry["sdk"], entry.get("id"),
+            )
+            continue
+        out.append(entry)
+    return out
+
+
+def _all_translate_backends() -> list[dict]:
+    """Built-ins first, then user-defined. Order = dropdown order."""
+    return TRANSLATE_BACKENDS_BUILTIN + _load_custom_translate_backends()
+
+
+def _backend_available(b: dict) -> bool:
+    """Available iff (a) no api_key_env declared (keyless / always-on), or
+    (b) the env var is set non-empty."""
+    env = b.get("api_key_env")
+    if not env:
+        return True
+    return bool(os.environ.get(env))
+
+
+def _get_translate_backend(backend_id: str) -> dict | None:
+    """Look up a backend by id across built-ins + user-defined."""
+    for b in _all_translate_backends():
+        if b["id"] == backend_id:
+            return b
+    return None
 
 # Disable extended thinking on every translation call. Claude variants
 # default to no-thinking already (opt-in only); DeepSeek-V4-flash defaults
@@ -171,6 +252,49 @@ app = FastAPI()
 @app.get("/")
 async def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+# ---------- /api/backends: tell the frontend which backends are usable ----------
+
+def _local_asr_available(bin_path: str, model_dir: str) -> bool:
+    """A local ASR backend is available iff its binary is callable (on PATH
+    or an absolute file) AND its model directory exists. Both have to be
+    true — a binary without weights crashes on first audio chunk."""
+    bin_ok = bool(shutil.which(bin_path)) or Path(bin_path).is_file()
+    return bin_ok and Path(model_dir).exists()
+
+
+def _list_translate_backends() -> list[dict]:
+    """Translate dropdown contents — registry filtered by env availability.
+    Built-ins first, user-defined (from livesub.toml) appended after."""
+    return [
+        {"id": b["id"], "label": b["label"]}
+        for b in _all_translate_backends()
+        if _backend_available(b)
+    ]
+
+
+def _list_asr_backends() -> list[dict]:
+    """ASR dropdown contents — cloud backends gated by API key, local ones
+    gated by binary + model dir presence."""
+    out: list[dict] = []
+    if os.environ.get("GEMINI_API_KEY"):
+        out.append({"id": "gemini", "label": "Gemini Live"})
+    if OPENAI_API_KEY:
+        out.append({"id": "openai-realtime", "label": "OpenAI Realtime"})
+    if _local_asr_available(QWEN_BIN, QWEN_MODEL_DIR):
+        out.append({"id": "qwen", "label": "Qwen (local)"})
+    if _local_asr_available(VOXTRAL_BIN, VOXTRAL_MODEL_DIR):
+        out.append({"id": "voxtral", "label": "Voxtral (local)"})
+    return out
+
+
+@app.get("/api/backends")
+async def list_backends():
+    return {
+        "asr": _list_asr_backends(),
+        "translate": _list_translate_backends(),
+    }
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -659,7 +783,10 @@ def _extract_retry_delay(msg: str, default: float = 5.0) -> float:
 @dataclass
 class Pipeline:
     client_ws: WebSocket
-    gemini: genai.Client
+    # gemini client is only created lazily when an active backend actually
+    # needs it (ASR=gemini or translate=gemini). None means "no Gemini key
+    # configured and no Gemini backend selected".
+    gemini: "genai.Client | None"
     target_lang: str
     source_lang: str
     scene: str = ""
@@ -667,6 +794,7 @@ class Pipeline:
     asr_backend: str = "gemini"
     translate_backend: str = "gemini"
     claude: "anthropic.AsyncAnthropic | None" = None
+    openai_client: "openai.AsyncOpenAI | None" = None
 
     audio_queue: "asyncio.Queue[bytes | None]" = field(default_factory=asyncio.Queue)
     sentence_queue: "asyncio.Queue[tuple[int, str, int] | None]" = field(default_factory=asyncio.Queue)
@@ -1527,10 +1655,13 @@ class Pipeline:
         return self.global_rev
 
     async def _maybe_trigger_partial(self):
-        """Possibly fire an intra-sentence partial translation. Only
-        enabled for anthropic-SDK backends (Claude variants, DeepSeek)
-        where the per-call cost is low enough to spam mid-sentence."""
-        if self.translate_backend not in ANTHROPIC_BACKENDS:
+        """Possibly fire an intra-sentence partial translation. Enabled for
+        anthropic- and openai-SDK backends (Claude variants, DeepSeek,
+        OpenAI direct, OpenRouter/ollama/etc.) where the per-call cost is
+        low enough to spam mid-sentence. Skipped for Gemini (uses its own
+        streaming flow) and `none` (no translation)."""
+        backend_cfg = _get_translate_backend(self.translate_backend) or {}
+        if backend_cfg.get("sdk") not in ("anthropic", "openai"):
             return
         text_now = self.sentence_buffer.strip()
         if not text_now:
@@ -1742,13 +1873,16 @@ class Pipeline:
             return
 
         # Paired translation: revise the previous sentence's translation
-        # in light of the new sentence. Enabled for all anthropic-SDK
+        # in light of the new sentence. Enabled only for anthropic-SDK
         # backends — Claude Haiku/Sonnet/Opus follow the [D]/[CURR]/[PREV]
         # format natively; DeepSeek-V4-flash also passes a 10/10 format
-        # battery once thinking is disabled (see ANTHROPIC_BACKENDS extra_body).
+        # battery once thinking is disabled (see ANTHROPIC_EXTRA_BODY).
+        # OpenAI-SDK backends fall back to plain translation — paired prompt
+        # works in principle but isn't validated against local LLMs yet.
         # Requires at least one prior turn (no paired on first sentence).
+        backend_cfg = _get_translate_backend(self.translate_backend) or {}
         use_paired = (
-            self.translate_backend in ANTHROPIC_BACKENDS
+            backend_cfg.get("sdk") == "anthropic"
             and self.paired_prev_sid is not None
             and bool(self.paired_prev_dst)
         )
@@ -1874,12 +2008,18 @@ class Pipeline:
         t_start = time.monotonic()
         # mutable dict so inner translator can stash first-chunk time
         metrics: dict = {"first_chunk_at": None}
+        backend_cfg = _get_translate_backend(self.translate_backend) or {}
+        sdk = backend_cfg.get("sdk", "gemini")
         try:
-            if self.translate_backend in ANTHROPIC_BACKENDS:
+            if sdk == "anthropic":
                 full = await self._translate_one_claude(
                     sid, rev, text, history, is_partial, metrics
                 )
-            else:
+            elif sdk == "openai":
+                full = await self._translate_one_openai(
+                    sid, rev, text, history, is_partial, metrics
+                )
+            else:  # "gemini" (and any unknown — fail soft to Gemini)
                 full = await self._translate_one_gemini(
                     sid, rev, text, history, is_partial, metrics
                 )
@@ -1992,20 +2132,20 @@ class Pipeline:
                 "message": "anthropic SDK not installed (uv add anthropic).",
             })
             return ""
-        backend_cfg = ANTHROPIC_BACKENDS.get(self.translate_backend)
-        if backend_cfg is None:
+        backend_cfg = _get_translate_backend(self.translate_backend)
+        if backend_cfg is None or backend_cfg.get("sdk") != "anthropic":
             return ""  # validator should prevent this
         model = backend_cfg["model"]
         if self.claude is None:
-            api_key_env = backend_cfg["api_key_env"]
-            api_key = os.environ.get(api_key_env)
-            if not api_key:
+            api_key_env = backend_cfg.get("api_key_env")
+            api_key = os.environ.get(api_key_env) if api_key_env else None
+            if api_key_env and not api_key:
                 await self._safe_send_json({
                     "type": "error",
                     "message": f"{api_key_env} env var not set.",
                 })
                 return ""
-            client_kwargs = {"api_key": api_key}
+            client_kwargs: dict = {"api_key": api_key or "dummy"}
             if backend_cfg.get("base_url"):
                 client_kwargs["base_url"] = backend_cfg["base_url"]
             self.claude = anthropic.AsyncAnthropic(**client_kwargs)
@@ -2039,13 +2179,6 @@ class Pipeline:
                     system=sys,
                     messages=messages,
                     extra_body=ANTHROPIC_EXTRA_BODY,
-                    # Auto-cache the last cacheable block. Within a session
-                    # `sys` is fixed and `messages` grows by appending — every
-                    # request reuses the prior request's cached prefix
-                    # (system + history pairs), only the new turn pays full
-                    # input price. Min cacheable prefix: 4096 tokens on Opus
-                    # 4.7 / Haiku 4.5, 2048 on Sonnet 4.6 — short prompts
-                    # silently no-op until the prefix grows past that.
                     cache_control={"type": "ephemeral"},
                 ) as stream:
                     async for chunk_text in stream.text_stream:
@@ -2082,6 +2215,108 @@ class Pipeline:
                 raise
         return "".join(full).strip()
 
+    async def _translate_one_openai(
+        self,
+        sid: int,
+        rev: int,
+        text: str,
+        history: list[tuple[str, str]],
+        is_partial: bool,
+        metrics: dict,
+    ) -> str:
+        """Translate via OpenAI-compatible chat completions (openai SDK).
+        Used for OpenAI itself, local OpenAI-compat servers (ollama,
+        lm-studio, vLLM), and routing services (OpenRouter, Together, etc.).
+        Same prompt shape as the Claude path, just on a different SDK.
+        Paired-translation isn't wired here yet — falls back to plain mode."""
+        if openai is None:
+            await self._safe_send_json({
+                "type": "error",
+                "message": "openai SDK not installed (uv add openai).",
+            })
+            return ""
+        backend_cfg = _get_translate_backend(self.translate_backend)
+        if backend_cfg is None or backend_cfg.get("sdk") != "openai":
+            return ""
+        model = backend_cfg["model"]
+        if self.openai_client is None:
+            api_key_env = backend_cfg.get("api_key_env")
+            api_key = os.environ.get(api_key_env) if api_key_env else None
+            if api_key_env and not api_key:
+                await self._safe_send_json({
+                    "type": "error",
+                    "message": f"{api_key_env} env var not set.",
+                })
+                return ""
+            client_kwargs: dict = {"api_key": api_key or "dummy"}
+            if backend_cfg.get("base_url"):
+                client_kwargs["base_url"] = backend_cfg["base_url"]
+            self.openai_client = openai.AsyncOpenAI(**client_kwargs)
+
+        sys = build_translation_system_instruction(self.target_lang, self.source_lang, self.scene)
+        # OpenAI chat.completions has a `system` role message rather than
+        # Anthropic's top-level `system` param. Otherwise message shape is
+        # the same: alternating user/assistant turns from history, current
+        # text as the last user turn.
+        messages: list[dict] = [{"role": "system", "content": sys}]
+        for src, dst in history:
+            messages.append({"role": "user", "content": f"Translate: {src}"})
+            messages.append({"role": "assistant", "content": dst})
+        if is_partial:
+            user_msg = (
+                "PARTIAL utterance — speaker is still mid-sentence, more text "
+                f"will arrive. Translate what is given so far:\n{text}"
+            )
+        else:
+            user_msg = f"Translate: {text}"
+        messages.append({"role": "user", "content": user_msg})
+
+        attempts = 0
+        max_attempts = 2
+        while True:
+            attempts += 1
+            full: list[str] = []
+            try:
+                stream = await self.openai_client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    max_tokens=512,
+                    stream=True,
+                )
+                async for event in stream:
+                    if not event.choices:
+                        continue
+                    delta = event.choices[0].delta.content or ""
+                    if delta:
+                        if metrics["first_chunk_at"] is None:
+                            metrics["first_chunk_at"] = time.monotonic()
+                        full.append(delta)
+                        await self._safe_send_json({
+                            "type": "translation", "sid": sid, "rev": rev, "text": delta,
+                        })
+                break
+            except Exception as e:
+                msg = str(e)
+                ml = msg.lower()
+                # Same retry policy as the Claude path — local OpenAI-compat
+                # servers (ollama, vLLM) occasionally return 502/503 during
+                # model warmup, and OpenAI-direct returns 429 under burst.
+                is_retryable = (
+                    "429" in msg or "rate_limit" in ml or "overloaded" in ml
+                    or "502" in msg or "503" in msg or "504" in msg
+                    or "bad gateway" in ml or "service unavailable" in ml
+                    or "gateway timeout" in ml
+                )
+                if is_retryable and attempts < max_attempts:
+                    log.warning(
+                        "openai sid=%d transient error, retrying in 3s: %s",
+                        sid, msg[:120],
+                    )
+                    await asyncio.sleep(3.0)
+                    continue
+                raise
+        return "".join(full).strip()
+
     async def _translate_one_claude_paired(
         self,
         sid: int,
@@ -2098,8 +2333,8 @@ class Pipeline:
         once finalized. prev_revised is None when Claude opted to KEEP."""
         if anthropic is None or self.claude is None:
             return {"curr": "", "prev_revised": None}
-        backend_cfg = ANTHROPIC_BACKENDS.get(self.translate_backend)
-        if backend_cfg is None:
+        backend_cfg = _get_translate_backend(self.translate_backend)
+        if backend_cfg is None or backend_cfg.get("sdk") != "anthropic":
             return {"curr": "", "prev_revised": None}
         model = backend_cfg["model"]
 
@@ -2223,20 +2458,39 @@ async def ws_endpoint(client_ws: WebSocket):
     source_lang = (config_msg.get("source_lang") or "auto").strip()
     scene = (config_msg.get("scene") or "").strip()
     glossary = (config_msg.get("glossary") or "").strip()
-    asr_backend = (config_msg.get("asr_backend") or "gemini").strip().lower()
-    if asr_backend not in ("gemini", "qwen", "voxtral", "openai-realtime"):
-        asr_backend = "gemini"
-    translate_backend = (config_msg.get("translate_backend") or "gemini").strip().lower()
-    valid_translate = {"gemini", "none"} | set(ANTHROPIC_BACKENDS.keys())
-    if translate_backend not in valid_translate:
-        translate_backend = "gemini"
+    # Validate backend choices against the live availability list. If the
+    # client picked something that isn't enabled in this deployment (missing
+    # API key, missing local binary, stale localStorage value), fall back
+    # to the first available — or fail closed when nothing's configured.
+    asr_backend = (config_msg.get("asr_backend") or "").strip().lower()
+    asr_available = {b["id"] for b in _list_asr_backends()}
+    if asr_backend not in asr_available:
+        asr_backend = next(iter(asr_available), "")
+    if not asr_backend:
+        await client_ws.close(
+            code=1003,
+            reason="no ASR backend available — set at least one API key or local binary"
+        )
+        return
+    translate_backend = (config_msg.get("translate_backend") or "").strip().lower()
+    tr_available = {b["id"] for b in _list_translate_backends()}
+    if translate_backend not in tr_available:
+        # `none` is always present, so this fallback chain always lands somewhere.
+        translate_backend = next(iter(tr_available), "none")
     log.info(
         "config: asr=%s tr=%s src=%r dst=%r scene=%dch gloss=%dch",
         asr_backend, translate_backend, source_lang, target_lang,
         len(scene), len(glossary),
     )
 
-    gemini = genai.Client(api_key=API_KEY, http_options={"api_version": "v1beta"})
+    # Only construct the Gemini client when the chosen backends actually
+    # need it. This lets a user run livesub with just ANTHROPIC_API_KEY
+    # (Claude translate) + a local ASR, no Gemini key required.
+    gemini = None
+    if (asr_backend == "gemini" or translate_backend == "gemini") and GEMINI_API_KEY:
+        gemini = genai.Client(
+            api_key=GEMINI_API_KEY, http_options={"api_version": "v1beta"}
+        )
     pipeline = Pipeline(
         client_ws=client_ws,
         gemini=gemini,
