@@ -24,6 +24,7 @@ const badgeMicEl = document.getElementById("badge-mic");
 const badgeAsrEl = document.getElementById("badge-asr");
 const badgeTranslateEl = document.getElementById("badge-translate");
 const debugModeInput = document.getElementById("debug-mode");
+const fontLargeInput = document.getElementById("font-large");
 
 const LS_LANG = "livesub.targetLang";
 const LS_SRC = "livesub.sourceLang";
@@ -34,6 +35,7 @@ const LS_SCENE_SEED = "livesub.sceneSeed";
 const LS_SCENE = "livesub.scene";
 const LS_GLOSSARY = "livesub.glossary";
 const LS_DEBUG = "livesub.debugMode";
+const LS_FONT_LARGE = "livesub.fontLarge";
 
 targetLangInput.value = localStorage.getItem(LS_LANG) || "Chinese (Simplified)";
 sourceLangInput.value = localStorage.getItem(LS_SRC) || "auto";
@@ -51,6 +53,21 @@ debugModeInput.addEventListener("change", () => {
   const on = debugModeInput.checked;
   document.body.classList.toggle("debug-mode", on);
   localStorage.setItem(LS_DEBUG, on ? "1" : "0");
+});
+
+// Large captions toggle. First-run default picked from UA (mobile → on,
+// desktop → off); after that the localStorage value sticks regardless of
+// device. Spoofing the UA via "request desktop site" flips the default
+// for that visit, which is by design — same logic on the other dimension.
+const savedFontLarge = localStorage.getItem(LS_FONT_LARGE);
+const fontLargeDefault = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+const fontLargeOn = savedFontLarge !== null ? savedFontLarge === "1" : fontLargeDefault;
+fontLargeInput.checked = fontLargeOn;
+document.body.classList.toggle("font-large", fontLargeOn);
+fontLargeInput.addEventListener("change", () => {
+  const on = fontLargeInput.checked;
+  document.body.classList.toggle("font-large", on);
+  localStorage.setItem(LS_FONT_LARGE, on ? "1" : "0");
 });
 
 // Backend dropdowns are populated dynamically from /api/backends so the user

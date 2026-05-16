@@ -54,8 +54,11 @@ button.secondary {
 }
 button.secondary:hover { background: #1a1a1a; color: #ccc; }
 
-#toggle .icon { font-size: 11px; line-height: 1; }
-#settings-toggle .icon { font-size: 13px; line-height: 1; }
+/* Uniform icon size + tight line-height across all toolbar buttons.
+   With labels hidden (narrow / subtitle mode), each button's height ends
+   up determined solely by `.icon` line-box — so they must match or the
+   buttons render at different heights. */
+button .icon { line-height: 1; }
 
 #input-source,
 #asr-backend,
@@ -397,20 +400,34 @@ body[data-translate-backend="none"] .history-item .src {
   transition: background-color 1000ms ease-out, color 1000ms ease-out;
 }
 
-/* ───────── Responsive: medium height (251–400px) ───────── */
+/* ───────── Large caption mode ───────── */
 
-@media (max-height: 400px) and (min-height: 201px) {
-  #history { padding: 4px 14px 8px; }
-  .history-item { padding: 5px 0; }
-  .history-item .src { font-size: 11px; }
-  .history-item .dst { font-size: 13px; }
-  .caption-zone { padding: 9px 14px 11px; }
-  .caption-zone.live::before { top: 4px; right: 10px; font-size: 8px; }
-  .translation { font-size: 21px; }
+/* Toggled by Settings → "Large captions". JS picks the default once from
+   UA (mobile/tablet → on, desktop → off); after that localStorage wins.
+   Bigger fonts for stand-mode use (phone on desk, watching from 1-2m). */
+body.font-large .translation { font-size: 38px; }
+body.font-large .transcript { font-size: 16px; }
+body.font-large .caption-zone { padding: 18px 18px 20px; }
+body.font-large .history-item .dst { font-size: 16px; }
+
+/* ───────── History auto-hide when there's no room for ≥2 rows ───────── */
+
+/* Below these thresholds the rest of the layout (controls + caption stack)
+   eats so much of the viewport that history can't show even 2 useful
+   rows. Per-mode thresholds: Large mode's bigger captions eat more, so
+   it needs more total height before history is worth showing. */
+@media (max-height: 350px) {
+  #history { display: none; }
+}
+@media (max-height: 450px) {
+  body.font-large #history { display: none; }
 }
 
-/* ───────── Responsive: subtitle mode (≤200px) ───────── */
+/* ───────── Subtitle mode (≤200px height): extreme override ───────── */
 
+/* Used for "place this window as a subtitle strip under a video" — height
+   is the limiting factor and even Small font is too tall. Force a compact
+   set of values regardless of .font-large. */
 @media (max-height: 200px) {
   #controls { padding: 4px 10px; gap: 6px; }
   #controls #input-source { padding: 4px 6px; font-size: 12px; }
@@ -418,9 +435,12 @@ body[data-translate-backend="none"] .history-item .src {
   #vu { width: 50px; height: 6px; }
   .caption-zone { padding: 9px 14px; background: transparent; }
   .caption-zone.live::before { display: none; }
-  .transcript { font-size: 13px; margin-bottom: 4px; }
-  .translation { font-size: 20px; }
-  #history { display: none; }
+  /* Override both the default and the Large-mode font sizes — these are
+     more specific than `body.font-large` by source order (defined later). */
+  .transcript,
+  body.font-large .transcript { font-size: 13px; margin-bottom: 4px; }
+  .translation,
+  body.font-large .translation { font-size: 20px; }
   #settings-panel { padding: 6px 8px; }
   .settings-form { padding: 8px 10px; gap: 6px 10px; }
 }
@@ -430,7 +450,6 @@ body[data-translate-backend="none"] .history-item .src {
 @media (max-width: 600px) {
   .settings-form { grid-template-columns: 1fr; }
   .settings-form .row.span2 { grid-column: 1; }
-  #controls #input-source { display: none; }
   #controls .badge { font-size: 10px; padding: 2px 5px; }
 }
 
@@ -444,4 +463,9 @@ body[data-translate-backend="none"] .history-item .src {
   #toggle .label,
   #settings-toggle .label,
   #clear .label { display: none; }
+  /* Equalize button height. ▶ / ⚙ / ✕ Unicode glyphs have different
+     bounding-box heights, so without min-height the three buttons render
+     at slightly different sizes. min-height matches the natural button
+     height when labels are shown (padding 6×2 + ~13px text line ≈ 28px). */
+  #controls button { min-height: 28px; }
 }
