@@ -47,6 +47,17 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_REALTIME_MODEL = os.environ.get(
     "OPENAI_REALTIME_MODEL", "gpt-realtime-whisper"
 )
+DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY")
+# DashScope Qwen3-ASR-Flash-Realtime — Alibaba's cloud-hosted Qwen ASR.
+# Two regions: international (Singapore) at dashscope-intl, mainland China
+# at dashscope. Default to international; override via env if needed.
+DASHSCOPE_BASE_URL = os.environ.get(
+    "DASHSCOPE_BASE_URL",
+    "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime"
+)
+DASHSCOPE_REALTIME_MODEL = os.environ.get(
+    "DASHSCOPE_REALTIME_MODEL", "qwen3-asr-flash-realtime"
+)
 DEEPSEEK_BASE_URL = os.environ.get(
     "DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic"
 )
@@ -282,6 +293,8 @@ def _list_asr_backends() -> list[dict]:
         out.append({"id": "gemini", "label": "Gemini Live"})
     if OPENAI_API_KEY:
         out.append({"id": "openai-realtime", "label": "OpenAI Realtime"})
+    if DASHSCOPE_API_KEY:
+        out.append({"id": "qwen-cloud", "label": "Qwen (cloud / DashScope)"})
     if _local_asr_available(QWEN_BIN, QWEN_MODEL_DIR):
         out.append({"id": "qwen", "label": "Qwen (local)"})
     if _local_asr_available(VOXTRAL_BIN, VOXTRAL_MODEL_DIR):
@@ -873,6 +886,8 @@ class Pipeline:
                 await self._voxtral_asr_worker()
             elif self.asr_backend == "openai-realtime":
                 await self._openai_realtime_asr_worker()
+            elif self.asr_backend == "qwen-cloud":
+                await self._dashscope_asr_worker()
             else:
                 while not self.stop_requested:
                     try:
@@ -1486,6 +1501,221 @@ class Pipeline:
                 raise
             except Exception:
                 log.exception("openai-realtime: session crashed; will reopen")
+                await asyncio.sleep(0.5)
+                continue
+
+    # ----- DashScope Qwen3-ASR-Flash-Realtime backend (cloud Qwen ASR) -----
+
+    async def _dashscope_asr_worker(self):
+        """Stream PCM to Alibaba's DashScope cloud at qwen3-asr-flash-realtime.
+        Protocol is OpenAI-Realtime-shaped but with flatter session.update
+        (input_audio_format/sample_rate at session top level, not nested) and
+        slightly different event names (.text for intermediate, vs OpenAI's
+        .delta). Server VAD is supported here (unlike gpt-realtime-whisper),
+        so livesub's own audio gate / prebuffer stay out of the way.
+        16kHz PCM accepted natively — no resampling needed."""
+        if websockets is None:
+            await self._safe_send_json({
+                "type": "error",
+                "message": "websockets package not installed",
+            })
+            return
+        if not DASHSCOPE_API_KEY:
+            await self._safe_send_json({
+                "type": "error",
+                "message": "DASHSCOPE_API_KEY env var not set.",
+            })
+            return
+
+        url = f"{DASHSCOPE_BASE_URL}?model={DASHSCOPE_REALTIME_MODEL}"
+        headers = [
+            ("Authorization", f"Bearer {DASHSCOPE_API_KEY}"),
+            # DashScope copies OpenAI's beta-header convention verbatim.
+            ("OpenAI-Beta", "realtime=v1"),
+        ]
+
+        while not self.stop_requested:
+            try:
+                async with websockets.connect(
+                    url, additional_headers=headers, max_size=2**24,
+                ) as ws:
+                    # Build session config. DashScope's shape differs from
+                    # OpenAI's: input_audio_format and sample_rate are flat
+                    # fields on `session`, not nested under audio.input.
+                    src = (self.source_lang or "").strip().lower()
+                    iso = {
+                        "japanese": "ja", "english": "en", "chinese": "zh",
+                        "korean": "ko", "spanish": "es",
+                    }.get(src)
+                    session_cfg: dict = {
+                        "modalities": ["text"],
+                        "input_audio_format": "pcm",
+                        "sample_rate": 16000,
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": 0.0,
+                            "silence_duration_ms": 400,
+                        },
+                    }
+                    if src and src != "auto":
+                        session_cfg["input_audio_transcription"] = {
+                            "language": iso or src,
+                        }
+                    await ws.send(json.dumps({
+                        "type": "session.update",
+                        "session": session_cfg,
+                    }))
+                    log.info(
+                        "dashscope: connected, model=%s lang=%s",
+                        DASHSCOPE_REALTIME_MODEL,
+                        (session_cfg.get("input_audio_transcription") or {}).get("language") or "auto",
+                    )
+                    await self._safe_send_json(
+                        {"type": "asr_session", "state": "open"}
+                    )
+                    if self.asr_started_at == 0.0:
+                        self.asr_started_at = time.monotonic()
+
+                    window_peak = 0
+                    window_count = 0
+                    # DashScope's `stash` is cumulative AND revises itself
+                    # mid-segment (adds/removes trailing punctuation,
+                    # rewrites words as more audio arrives). Computing
+                    # incremental deltas from the cumulative stream is
+                    # fragile because revisions break the "new is a prefix
+                    # extension of old" assumption. Instead, we send
+                    # replace-style `transcript_replace` events to the
+                    # client (frontend overwrites the visible caption each
+                    # time) and rely on `.completed` for the canonical
+                    # final transcript / sentence boundary.
+
+                    async def feed():
+                        nonlocal window_peak, window_count
+                        while True:
+                            chunk = await self.audio_queue.get()
+                            if chunk is None:
+                                try:
+                                    await ws.send(json.dumps(
+                                        {"type": "input_audio_buffer.commit"}
+                                    ))
+                                except Exception:
+                                    pass
+                                return
+                            self.stats_chunks += 1
+                            self.stats_bytes += len(chunk)
+                            self.chunks_fed_to_asr += 1
+                            peak = chunk_peak(chunk)
+                            if peak > window_peak:
+                                window_peak = peak
+                            window_count += 1
+                            if window_count >= 12:
+                                await self._safe_send_json({
+                                    "type": "audio_stats",
+                                    "peak": window_peak,
+                                    "chunks_per_sec": int(window_count / 0.5),
+                                })
+                                window_peak = 0
+                                window_count = 0
+                            if (
+                                self.stats_chunks in (1, 25, 100)
+                                or self.stats_chunks % 250 == 0
+                            ):
+                                elapsed = time.monotonic() - self.asr_started_at
+                                audio_fed_sec = self.chunks_fed_to_asr * 0.04
+                                rt = audio_fed_sec / elapsed if elapsed > 0 else 0
+                                queue_lag = self.audio_queue.qsize() * 0.04
+                                log.info(
+                                    "dashscope perf chunks=%d audio=%.1fs "
+                                    "elapsed=%.1fs realtime=%.2fx queue_lag=%.1fs",
+                                    self.stats_chunks, audio_fed_sec,
+                                    elapsed, rt, queue_lag,
+                                )
+                            await ws.send(json.dumps({
+                                "type": "input_audio_buffer.append",
+                                "audio": base64.b64encode(chunk).decode("ascii"),
+                            }))
+
+                    async def receive():
+                        async for raw in ws:
+                            try:
+                                evt = json.loads(raw)
+                            except json.JSONDecodeError:
+                                log.warning(
+                                    "dashscope: non-JSON frame: %r", raw[:120]
+                                )
+                                continue
+                            t = evt.get("type", "")
+                            if t == "conversation.item.input_audio_transcription.text":
+                                # Cumulative stash — emit as a replace event
+                                # for the visible LIVE caption. Don't touch
+                                # sentence_buffer / boundary detection (we
+                                # let DashScope's VAD draw the boundaries
+                                # via the .completed event below).
+                                stash = evt.get("stash") or evt.get("text") or ""
+                                if stash:
+                                    if self.current_seg_first_chunk == 0.0:
+                                        self.current_seg_first_chunk = time.monotonic()
+                                    await self._safe_send_json({
+                                        "type": "transcript_replace",
+                                        "sid": self.next_sid,
+                                        "text": stash,
+                                    })
+                            elif t == "conversation.item.input_audio_transcription.completed":
+                                # DashScope's VAD says this speech segment
+                                # ended. Use its canonical `transcript`
+                                # field (already deduplicated / corrected)
+                                # as the sentence, skipping livesub's
+                                # punctuation-based boundary detection.
+                                final = (evt.get("transcript") or "").strip()
+                                if final:
+                                    self.sentence_buffer = final
+                                await self._finalize_pending_sentence()
+                            elif t == "session.finished":
+                                # Server closed the session — exit loop and
+                                # let the outer reconnect logic decide what's
+                                # next.
+                                return
+                            elif t == "error":
+                                err = evt.get("error", {})
+                                log.error(
+                                    "dashscope error: %s — %s",
+                                    err.get("type"), err.get("message"),
+                                )
+                                await self._safe_send_json({
+                                    "type": "error",
+                                    "message": (
+                                        f"DashScope: {err.get('message') or err}"
+                                    ),
+                                })
+                            elif t in (
+                                "session.created", "session.updated",
+                                "input_audio_buffer.speech_started",
+                                "input_audio_buffer.speech_stopped",
+                            ):
+                                pass  # informational; no action needed
+
+                    feed_task = asyncio.create_task(feed())
+                    recv_task = asyncio.create_task(receive())
+                    done, pending = await asyncio.wait(
+                        {feed_task, recv_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for t in pending:
+                        t.cancel()
+                        try:
+                            await t
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                    for t in done:
+                        exc = t.exception()
+                        if exc is not None:
+                            raise exc
+                    if self.stop_requested:
+                        return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("dashscope: session crashed; will reopen")
                 await asyncio.sleep(0.5)
                 continue
 

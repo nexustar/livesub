@@ -552,6 +552,15 @@ async function start() {
           render();
           break;
         }
+        case "transcript_replace": {
+          // Used by backends that stream a cumulative transcript that
+          // revises itself mid-segment (DashScope qwen3-asr-flash-realtime).
+          // Overwrite src wholesale instead of appending.
+          const s = getOrCreate(msg.sid);
+          s.src = msg.text;
+          render();
+          break;
+        }
         case "transcript_done": {
           const s = getOrCreate(msg.sid);
           s.srcDone = true;
