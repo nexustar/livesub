@@ -187,14 +187,6 @@ SENTENCE_MAX_CHARS = 50
 #   anime narration, hesitation-heavy speech) more time to accumulate into
 #   meaningful chunks before being dispatched as a fragment.
 SENTENCE_IDLE_FLUSH_SEC = 5.0
-#   never dispatch a sentence shorter than this — avoids tiny "OK." / "嗯."
-#   fragments getting their own translation slot. Below this we keep
-#   accumulating (or silently drop on idle flush). 8 (vs original 4) lets
-#   2-3 character qwen idle-flush noise stay buffered for the next chunk
-#   instead of becoming a standalone sid that the translator can't make
-#   sense of.
-MIN_DISPATCH_CHARS = 8
-
 # Intra-sentence partial translation (used by Claude backend).
 # Trigger a fresh partial translation of the current buffer when both:
 #   - this many seconds have passed since the last partial fired
@@ -235,16 +227,6 @@ VOXTRAL_MODEL_DIR = os.environ.get(
 # `-I <secs>`: latency / efficiency knob, voxtral's own default is 2.0.
 VOXTRAL_INTERVAL_SEC = float(os.environ.get("VOXTRAL_INTERVAL_SEC", "2.0"))
 
-# Cross-segment dedup thresholds. With --past-text no, qwen's stream chunks
-# re-decode overlapping audio (the same speech ends up in multiple stream
-# steps). These segments share the "burst flush" fingerprint:
-#   - asr_span ≈ 0  (no fresh audio was streamed during this segment)
-#   - gap from previous dispatch is sub-second
-# When BOTH triggers fire AND text overlaps the prior dispatch, drop. Real
-# audio repetition (anime catchphrase, refrain) has asr_span > 0 and a
-# human-pause-length gap, so it survives this filter.
-DEDUP_ASR_SPAN_MAX = float(os.environ.get("DEDUP_ASR_SPAN_MAX", "0.3"))
-DEDUP_GAP_MAX = float(os.environ.get("DEDUP_GAP_MAX", "0.5"))
 QWEN_MODEL_DIR = os.environ.get("QWEN_ASR_MODEL_DIR", "qwen3-asr-0.6b")
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -602,104 +584,6 @@ def find_last_punct(text: str, include_soft: bool = False) -> int:
     return last
 
 
-# Repetition de-duplication. Adapted from Qwen3-ASR-Toolkit's
-# post_text_process (https://github.com/QwenLM/Qwen3-ASR-Toolkit/blob/main/
-# qwen3_asr_toolkit/qwen3asr.py). The official toolkit uses a threshold of
-# 20 consecutive reps because it targets the cloud API (much larger model
-# than our local 0.6b). Greedy local inference loops far more often, so we
-# trigger at:
-#   • 3+ reps of any unit (≤ MAX_UNIT chars) — official-style
-#   • 2 reps of a long unit (≥ LONG_UNIT chars) — extra catch for the
-#     within-segment loops we observe on qwen-0.6b
-PATTERN_MAX_UNIT = 30   # cap per-pattern length to bound O(n*max_unit)
-PATTERN_REPS_3 = 3
-PATTERN_REPS_2_MIN_UNIT = 10  # 2-rep dedup only kicks in for 10+ char units
-
-
-def _collapse_consec_pattern(s: str, reps_threshold: int,
-                             min_unit: int, max_unit: int) -> str:
-    """Walk the string left-to-right; whenever a unit of length 1..max_unit
-    repeats `reps_threshold` or more times consecutively, collapse to one
-    occurrence. Mirrors fix_pattern_repeats() from the official toolkit but
-    with min_unit support so we can express both rules above."""
-    n = len(s)
-    if n < reps_threshold * min_unit:
-        return s
-    out: list[str] = []
-    i = 0
-    while i < n:
-        matched_k = 0
-        for k in range(min_unit, max_unit + 1):
-            if i + k * reps_threshold > n:
-                break
-            pattern = s[i:i + k]
-            ok = True
-            for r in range(1, reps_threshold):
-                if s[i + r * k:i + (r + 1) * k] != pattern:
-                    ok = False
-                    break
-            if ok:
-                matched_k = k
-                break
-        if matched_k:
-            pattern = s[i:i + matched_k]
-            # extend forward as long as the run continues
-            j = i + reps_threshold * matched_k
-            while j + matched_k <= n and s[j:j + matched_k] == pattern:
-                j += matched_k
-            out.append(pattern)
-            i = j
-        else:
-            out.append(s[i])
-            i += 1
-    return "".join(out)
-
-
-def trim_immediate_repetitions(text: str) -> str:
-    """Collapse autoregressive feedback-loop repetitions in qwen-asr output.
-    Two passes:
-      1) any unit, 3+ consecutive reps  →  collapse to 1
-      2) long unit (≥10 chars), 2+ reps →  collapse to 1
-    Run #1 first (it's safe + handles 3x cases like sid=22 in our logs),
-    then #2 catches the 2x long-phrase loops (sid=23-25 in our logs) that
-    rule #1 misses."""
-    text = _collapse_consec_pattern(
-        text, reps_threshold=PATTERN_REPS_3,
-        min_unit=1, max_unit=PATTERN_MAX_UNIT,
-    )
-    text = _collapse_consec_pattern(
-        text, reps_threshold=2,
-        min_unit=PATTERN_REPS_2_MIN_UNIT, max_unit=PATTERN_MAX_UNIT,
-    )
-    return text
-
-
-def _texts_overlap(a: str, b: str) -> bool:
-    """Detect that two dispatched sentences likely come from the same
-    underlying audio (qwen chunk re-transcription). Conservative — we'd
-    rather miss a duplicate than merge two genuinely different sentences:
-      • exact match → True
-      • substring AND lengths within 1.7× → True (chunk overlap typically
-        cuts a few trailing chars off the shorter version)
-      • shared prefix ≥ 80% of longer → True
-    Things like "好的" being a substring of "我说好的好的" do NOT count
-    because the length ratio is too unequal."""
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
-    if short in long_ and len(short) / len(long_) >= 0.6:
-        return True
-    n = len(short)
-    common = 0
-    for i in range(n):
-        if short[i] != long_[i]:
-            break
-        common += 1
-    return common / len(long_) >= 0.8
-
-
 def chunk_peak(chunk: bytes) -> int:
     """Absolute peak sample value in a 16-bit s16le PCM chunk (0..32767)."""
     if len(chunk) < 2:
@@ -837,11 +721,6 @@ class Pipeline:
     paired_prev_sid: int | None = None
     paired_prev_src: str = ""
     paired_prev_dst: str = ""
-    # Cross-segment dedup state. Track the last dispatched sentence (text
-    # and wall time) so we can detect chunk-overlap re-transcription
-    # (qwen's --past-text no side effect). See _is_chunk_overlap_dup().
-    last_dispatched_text: str = ""
-    last_dispatched_at: float = 0.0
 
     # ----- audio ingest from client websocket -----
 
@@ -1661,15 +1540,15 @@ class Pipeline:
                                         "text": stash,
                                     })
                             elif t == "conversation.item.input_audio_transcription.completed":
-                                # DashScope's VAD says this speech segment
-                                # ended. Use its canonical `transcript`
-                                # field (already deduplicated / corrected)
-                                # as the sentence, skipping livesub's
-                                # punctuation-based boundary detection.
+                                # DashScope's VAD draws the segment boundary
+                                # and gives us a canonical `transcript`.
+                                # Dispatch directly; buffer accumulation /
+                                # idle flush isn't needed for this backend.
                                 final = (evt.get("transcript") or "").strip()
+                                self.sentence_buffer = ""
+                                self.last_chunk_time = 0.0
                                 if final:
-                                    self.sentence_buffer = final
-                                await self._finalize_pending_sentence()
+                                    await self._dispatch_sentence(final)
                             elif t == "session.finished":
                                 # Server closed the session — exit loop and
                                 # let the outer reconnect logic decide what's
@@ -1836,19 +1715,17 @@ class Pipeline:
         if self.sentence_buffer[:1].isspace():
             self.sentence_buffer = self.sentence_buffer.lstrip()
         self.last_chunk_time = now
-        # 1) hard-punctuation cut — preferred boundary, but only if the resulting
-        #    sentence is long enough. Otherwise wait for more text to merge
-        #    with this fragment (avoids translating "Hi." / "OK." / "嗯." as
-        #    standalone sentences).
+        # 1) hard-punctuation cut — preferred boundary. Any non-empty
+        #    sentence ending in .!?。！？ gets dispatched immediately,
+        #    even short interjections like "嗯。" / "OK." / "そう。" —
+        #    those are real conversational content, not noise.
         idx = find_last_punct(self.sentence_buffer, include_soft=False)
         if idx >= 0:
             sentence = self.sentence_buffer[: idx + 1].strip()
-            if len(sentence) >= MIN_DISPATCH_CHARS:
+            if sentence:
                 self.sentence_buffer = self.sentence_buffer[idx + 1:]
-                if sentence:
-                    await self._dispatch_sentence(sentence)
+                await self._dispatch_sentence(sentence)
                 return
-            # too short — leave buffer alone, next chunk may extend the sentence
         # 2) soft-punctuation cut — once the buffer is long enough, comma/
         #    semicolon makes a much better translation unit than a hard 80-char
         #    word cut. Especially important for CJK where there are no spaces
@@ -1857,10 +1734,9 @@ class Pipeline:
             idx = find_last_punct(self.sentence_buffer, include_soft=True)
             if idx >= 0:
                 sentence = self.sentence_buffer[: idx + 1].strip()
-                if len(sentence) >= MIN_DISPATCH_CHARS:
+                if sentence:
                     self.sentence_buffer = self.sentence_buffer[idx + 1:]
-                    if sentence:
-                        await self._dispatch_sentence(sentence)
+                    await self._dispatch_sentence(sentence)
                     return
         # 3) length fallback — last resort. Hard cap buffer growth so
         #    translation actually fires even when neither hard nor soft punct
@@ -1925,16 +1801,14 @@ class Pipeline:
             log.exception("partial translation failed sid=%d rev=%d", sid, rev)
 
     async def _finalize_pending_sentence(self):
-        """ASR turn ended (or idle timeout). Whatever's in the buffer counts
-        as a sentence — but skip very short fragments (probably noise / mis-
-        recognition). Long ones go to translation."""
+        """ASR turn ended (or idle timeout). Dispatch whatever's in the
+        buffer as a sentence. Short utterances ("嗯。" / "OK." / "うん。")
+        are real content too, so no length filtering."""
         rest = self.sentence_buffer.strip()
         self.sentence_buffer = ""
         self.last_chunk_time = 0.0
-        if len(rest) >= MIN_DISPATCH_CHARS:
+        if rest:
             await self._dispatch_sentence(rest)
-        elif rest:
-            log.info("dropping short fragment on flush: %r", rest)
 
     async def idle_flush_loop(self):
         """Background task: if no transcript chunk has arrived for
@@ -1959,56 +1833,7 @@ class Pipeline:
             pass
 
     async def _dispatch_sentence(self, sentence: str):
-        # Strip qwen-asr feedback-loop repetitions (e.g. 'XYXYXY' → 'XY')
-        # before assigning a sid. Cheap pre-translation cleanup so the
-        # translator and history never see the duplicates.
-        original = sentence
-        sentence = trim_immediate_repetitions(sentence)
-        if len(sentence) < len(original):
-            log.info(
-                "trimmed %d-char repetition from segment: %r → %r",
-                len(original) - len(sentence),
-                original[:60] + ("…" if len(original) > 60 else ""),
-                sentence[:60] + ("…" if len(sentence) > 60 else ""),
-            )
-        if not sentence:
-            # Whole segment was a self-loop with no content — drop it.
-            log.info("dropped fully-repetitive segment: %r", original[:60])
-            self.current_seg_first_chunk = 0.0
-            self.current_seg_start = time.monotonic()
-            return
-        # Cross-segment dedup. With --past-text no, qwen re-decodes overlapping
-        # audio across stream chunks → same content emitted in multiple sids.
-        # Fingerprint of this artifact:
-        #   • asr_span ≈ 0 (qwen flushed buffered tokens, not freshly streaming)
-        #   • gap from last dispatch is sub-second (same chunk's leftover)
-        #   • text overlaps the previous dispatch
-        # Real audio repetition (anime chant, refrain) doesn't hit this:
-        # qwen has to actually decode that audio, so asr_span > 0 and the
-        # speaker pause makes gap > 0.5 s.
         now = time.monotonic()
-        check_asr_span = (
-            now - self.current_seg_first_chunk
-            if self.current_seg_first_chunk else 0.0
-        )
-        gap = now - self.last_dispatched_at if self.last_dispatched_at else 999.0
-        if (check_asr_span < DEDUP_ASR_SPAN_MAX
-                and gap < DEDUP_GAP_MAX
-                and _texts_overlap(sentence, self.last_dispatched_text)):
-            log.info(
-                "dedup: dropping chunk-overlap dup (asr_span=%.2fs gap=%.2fs): "
-                "%r ≈ prev %r",
-                check_asr_span, gap,
-                sentence[:50],
-                self.last_dispatched_text[:50],
-            )
-            # Don't increment sid, don't translate, don't promote. Reset
-            # per-segment timing so the next ASR seg log starts clean.
-            self.current_seg_first_chunk = 0.0
-            self.current_seg_start = now
-            return
-        self.last_dispatched_text = sentence
-        self.last_dispatched_at = now
         sid = self.next_sid
         self.next_sid += 1
         # Per-segment timing log:
