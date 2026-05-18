@@ -15,13 +15,20 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* Safe-area insets push content out of notch / Dynamic Island / home
+     indicator zones when running as a fullscreen PWA. Body-level handles
+     left+right (landscape notch); top/bottom are handled per-edge below. */
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 /* ───────── Controls bar ───────── */
 
 #controls {
   flex: 0 0 auto;
-  padding: 8px 14px;
+  /* padding-top respects iOS status bar / Dynamic Island intrusion in
+     PWA fullscreen mode. Fallback to the original 8px when no inset. */
+  padding: max(8px, env(safe-area-inset-top)) 14px 8px;
   display: flex;
   gap: 10px;
   align-items: center;
@@ -246,6 +253,10 @@ body.settings-open #history { display: none; }
   flex-direction: column;
   overflow: hidden;   /* clip prev's translateY(100%) start state during animation */
   margin-top: auto;
+  /* Home indicator (iPhone) sits at the bottom and can overlap the LIVE
+     caption when running as a fullscreen PWA. Push the stack up by that
+     inset. The current caption-zone's own bottom padding is on top of this. */
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 .caption-zone {
