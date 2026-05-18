@@ -58,6 +58,12 @@ DASHSCOPE_BASE_URL = os.environ.get(
 DASHSCOPE_REALTIME_MODEL = os.environ.get(
     "DASHSCOPE_REALTIME_MODEL", "qwen3-asr-flash-realtime"
 )
+# Server VAD threshold for DashScope. Alibaba's official documented
+# recommendation is 0.2 (range 0-1, lower = catch quieter speech, higher =
+# need louder audio). Bump up in noisy environments (cafe, BGM, fan).
+DASHSCOPE_VAD_THRESHOLD = float(
+    os.environ.get("DASHSCOPE_VAD_THRESHOLD", "0.2")
+)
 DEEPSEEK_BASE_URL = os.environ.get(
     "DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic"
 )
@@ -1432,8 +1438,8 @@ class Pipeline:
                         "sample_rate": 16000,
                         "turn_detection": {
                             "type": "server_vad",
-                            "threshold": 0.0,
-                            "silence_duration_ms": 400,
+                            "threshold": DASHSCOPE_VAD_THRESHOLD,
+                            "silence_duration_ms": 600,
                         },
                     }
                     if src and src != "auto":
@@ -2585,6 +2591,24 @@ async def ws_endpoint(client_ws: WebSocket):
 
 
 if __name__ == "__main__":
+    import sys
     import uvicorn
+
+    # Fail fast at startup if no ASR backend is configured. Without this the
+    # server starts fine and only rejects clients at WS-connect time with a
+    # cryptic close code — much less obvious than a startup error.
+    _asr_avail = _list_asr_backends()
+    if not _asr_avail:
+        log.error(
+            "no ASR backend configured — set at least one of "
+            "GEMINI_API_KEY / OPENAI_API_KEY / DASHSCOPE_API_KEY, or point "
+            "QWEN_ASR_BIN+QWEN_ASR_MODEL_DIR / VOXTRAL_BIN+VOXTRAL_MODEL_DIR "
+            "at a local binary"
+        )
+        sys.exit(1)
+    log.info(
+        "ASR backends available: %s",
+        ", ".join(b["id"] for b in _asr_avail),
+    )
 
     uvicorn.run(app, host="0.0.0.0", port=8000)
