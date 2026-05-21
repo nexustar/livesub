@@ -288,7 +288,7 @@ def _list_asr_backends() -> list[dict]:
     if OPENAI_API_KEY:
         out.append({"id": "openai-realtime", "label": "OpenAI Realtime"})
     if DASHSCOPE_API_KEY:
-        out.append({"id": "qwen-cloud", "label": "Qwen (cloud / DashScope)"})
+        out.append({"id": "qwen-cloud", "label": "Qwen ASR (Cloud)"})
     if _local_asr_available(QWEN_BIN, QWEN_MODEL_DIR):
         out.append({"id": "qwen", "label": "Qwen (local)"})
     if _local_asr_available(VOXTRAL_BIN, VOXTRAL_MODEL_DIR):
@@ -1537,20 +1537,43 @@ class Pipeline:
                                 continue
                             t = evt.get("type", "")
                             if t == "conversation.item.input_audio_transcription.text":
-                                # Cumulative stash — emit as a replace event
-                                # for the visible LIVE caption. Don't touch
-                                # sentence_buffer / boundary detection (we
-                                # let DashScope's VAD draw the boundaries
-                                # via the .completed event below).
-                                stash = evt.get("stash") or evt.get("text") or ""
-                                if stash:
+                                # DashScope splits the live transcript into
+                                # two fields:
+                                #   `text`  — confirmed/stable cumulative
+                                #             transcript (what the model is
+                                #             committed to so far).
+                                #   `stash` — provisional tail still being
+                                #             refined (the last word or two
+                                #             that may yet be revised).
+                                # The official Alibaba samples display
+                                # `text + stash` as the live caption — that
+                                # is the model's current best guess. Reading
+                                # only `stash` (an earlier bug here) drops
+                                # the entire confirmed prefix and shows only
+                                # the wobbling tail — symptom was a tiny
+                                # source caption that "snaps back" to the
+                                # full sentence at `.completed`.
+                                # We don't run livesub's own punctuation /
+                                # length boundary detection (DashScope's VAD
+                                # draws boundaries via `.completed`), but we
+                                # DO mirror the live text into
+                                # `sentence_buffer` and invoke
+                                # `_maybe_trigger_partial` so long VAD turns
+                                # get intra-segment partial translations
+                                # instead of waiting the full turn.
+                                text_confirmed = evt.get("text") or ""
+                                stash_pending = evt.get("stash") or ""
+                                live_text = text_confirmed + stash_pending
+                                if live_text:
                                     if self.current_seg_first_chunk == 0.0:
                                         self.current_seg_first_chunk = time.monotonic()
                                     await self._safe_send_json({
                                         "type": "transcript_replace",
                                         "sid": self.next_sid,
-                                        "text": stash,
+                                        "text": live_text,
                                     })
+                                    self.sentence_buffer = live_text
+                                    await self._maybe_trigger_partial()
                             elif t == "conversation.item.input_audio_transcription.completed":
                                 # DashScope's VAD draws the segment boundary
                                 # and gives us a canonical `transcript`.
@@ -1560,6 +1583,21 @@ class Pipeline:
                                 self.sentence_buffer = ""
                                 self.last_chunk_time = 0.0
                                 if final:
+                                    # Sync the client's visible src to the
+                                    # canonical final before dispatch. The
+                                    # last `.text` stash is sometimes shorter
+                                    # / less complete than `.completed`'s
+                                    # transcript (DashScope rewrites at
+                                    # segment close). Without this, the
+                                    # translator gets the full sentence but
+                                    # the caption shows only the truncated
+                                    # stash — visible bug: complete
+                                    # translation paired with partial source.
+                                    await self._safe_send_json({
+                                        "type": "transcript_replace",
+                                        "sid": self.next_sid,
+                                        "text": final,
+                                    })
                                     await self._dispatch_sentence(final)
                             elif t == "session.finished":
                                 # Server closed the session — exit loop and
