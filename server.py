@@ -193,15 +193,21 @@ SENTENCE_MAX_CHARS = 50
 #   anime narration, hesitation-heavy speech) more time to accumulate into
 #   meaningful chunks before being dispatched as a fragment.
 SENTENCE_IDLE_FLUSH_SEC = 5.0
-# Intra-sentence partial translation (used by Claude backend).
-# Trigger a fresh partial translation of the current buffer when both:
+# Intra-sentence partial translation (used by Claude / OpenAI-SDK
+# backends — Claude variants, DeepSeek, OpenAI direct, etc.).
+# Trigger a fresh partial translation of the current buffer when BOTH:
 #   - this many seconds have passed since the last partial fired
-#   - this many new characters have been appended since the last partial
-# 3s (vs original 1.2s) reduces the partial-update rate so the captions
-# area snaps less often. Combined with the frontend's pendingDst-then-swap
-# strategy this keeps the live caption stable instead of flickering.
-PARTIAL_INTERVAL_SEC = 3.0
-PARTIAL_MIN_NEW_CHARS = 10
+#   - this many new UTF-8 bytes have been appended since the last partial
+# Why bytes, not characters: ASCII is 1 byte, CJK is 3 bytes in UTF-8.
+# Speech rate in "bytes/word" is roughly comparable across English / CJK
+# (~5–8 B/word), while "chars/word" differs by ~5×. Using bytes gives a
+# consistent "fire on ~a phrase of new content" semantics regardless of
+# source language. 24 ≈ 5 English words or 8 CJK characters.
+# 2s interval keeps the partial responsive enough to feel live while
+# leaving headroom for the translation API (~300–800ms per call) to
+# complete one revision before the next fires.
+PARTIAL_INTERVAL_SEC = 2.0
+PARTIAL_MIN_NEW_BYTES = 24
 
 # Skip audio chunks whose absolute peak is below this. Catches the case
 # where the input is synthetic silence (peak=0, e.g. between songs / video
@@ -1781,13 +1787,15 @@ class Pipeline:
         now = time.monotonic()
         if now - self.last_partial_time < PARTIAL_INTERVAL_SEC:
             return
-        if len(self.sentence_buffer) - self.last_partial_buf_len < PARTIAL_MIN_NEW_CHARS:
+        # UTF-8 bytes (not code points) — see PARTIAL_MIN_NEW_BYTES comment.
+        buf_bytes = len(self.sentence_buffer.encode("utf-8"))
+        if buf_bytes - self.last_partial_buf_len < PARTIAL_MIN_NEW_BYTES:
             return
         # Cancel any in-flight partial; the new revision supersedes it.
         if self.in_flight_partial and not self.in_flight_partial.done():
             self.in_flight_partial.cancel()
         self.last_partial_time = now
-        self.last_partial_buf_len = len(self.sentence_buffer)
+        self.last_partial_buf_len = buf_bytes
         sid = self.next_sid
         rev = self._next_rev()
         snapshot = text_now
