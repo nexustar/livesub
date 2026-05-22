@@ -352,14 +352,16 @@ body[data-translate-backend="none"] .history-item .src {
   padding: 8px 16px 16px;
   background: #050505;
   box-shadow: inset 0 6px 8px -6px rgba(0, 0, 0, 0.7);
-  /* column-reverse anchors items to the bottom: with prepend(), the newest
-     item lands at the visual bottom (= start of the reversed axis), older
-     items push up. Default scrollTop=0 keeps the bottom (newest) visible;
-     scrolling up reveals older. Sidesteps the Chrome justify-content:
-     flex-end + overflow scrolling clip bug. */
+  /* Normal column + append() keeps DOM order chronological, so selecting
+     top-to-bottom and copying produces oldest→newest in the clipboard
+     (column-reverse + prepend used to invert that). margin-top:auto on
+     the first item anchors the stack to the bottom — items grow upward
+     until they overflow, at which point JS scrolls to the bottom on
+     append. Avoids the Chrome justify-content:flex-end overflow clip bug. */
   display: flex;
-  flex-direction: column-reverse;
+  flex-direction: column;
 }
+#history > .history-item:first-child { margin-top: auto; }
 
 .history-item {
   padding: 7px 0;

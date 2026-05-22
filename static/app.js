@@ -365,9 +365,15 @@ function appendToHistory(s) {
   dstDiv.className = "dst";
   dstDiv.textContent = s.dst.trim();
   item.append(srcDiv, dstDiv);
-  // #history is flex column-reverse: prepending puts the newest at the
-  // visual bottom (start of the reversed axis), older items push up.
-  historyEl.prepend(item);
+  // Append (not prepend) so DOM order is chronological — copy-paste then
+  // gives oldest→newest, matching the visual top-to-bottom reading order.
+  // Anchor scroll: if the user was already at the bottom, follow the
+  // newest item; otherwise leave their scroll position alone so they can
+  // keep reading older entries without being yanked away.
+  const wasAtBottom =
+    historyEl.scrollHeight - historyEl.clientHeight - historyEl.scrollTop < 4;
+  historyEl.append(item);
+  if (wasAtBottom) historyEl.scrollTop = historyEl.scrollHeight;
 }
 
 function applyPrevRevision(sid, text) {
