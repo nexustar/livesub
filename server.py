@@ -58,11 +58,11 @@ DASHSCOPE_BASE_URL = os.environ.get(
 DASHSCOPE_REALTIME_MODEL = os.environ.get(
     "DASHSCOPE_REALTIME_MODEL", "qwen3-asr-flash-realtime"
 )
-# Server VAD threshold for DashScope. Alibaba's official documented
-# recommendation is 0.2 (range 0-1, lower = catch quieter speech, higher =
-# need louder audio). Bump up in noisy environments (cafe, BGM, fan).
+# Server VAD threshold for DashScope (range 0-1, lower = catch quieter
+# speech, higher = need louder audio). Alibaba documents 0.2; 0.5 is our
+# empirical default — tune per environment.
 DASHSCOPE_VAD_THRESHOLD = float(
-    os.environ.get("DASHSCOPE_VAD_THRESHOLD", "0.2")
+    os.environ.get("DASHSCOPE_VAD_THRESHOLD", "0.5")
 )
 DEEPSEEK_BASE_URL = os.environ.get(
     "DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic"

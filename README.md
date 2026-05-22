@@ -1,77 +1,138 @@
 # livesub
 
-Real-time bilingual live captions for whatever's playing in a browser
-tab or your microphone. Built for watching Japanese livestreams
-(concerts, anime events, podcasts) with Chinese / English subtitles,
-but works for any language pair the underlying ASR + translator support.
+**Local-first** real-time bilingual live captions. Audio capture and
+speech-to-text run fully offline with the recommended Qwen3-ASR 0.6B —
+which uniquely handles transcription **over background music** — while
+translation is your choice: local LLM, cloud API, or skip it entirely.
+
+Built for Japanese livestreams (concerts, anime events, podcasts) with
+Chinese / English subtitles, but works for any language pair the
+underlying pipeline supports.
 
 ```
 [browser tab audio | mic]
         │  16 kHz s16le, 40 ms chunks
         ▼
-    [ ASR ]      ← Gemini Live | OpenAI Realtime | Qwen3-ASR (local) | Voxtral-4B (local)
+    [ Speech-to-text ] ← Qwen3-ASR (local, BGM-capable) | Qwen Cloud | OpenAI Realtime | Voxtral (local) | Gemini Live
         ▼
-    [ Translator ] ← Claude Haiku/Sonnet/Opus (paired) | Gemini | DeepSeek | none
+    [ Translator ]     ← Local LLM (Ollama, lm-studio) | DeepSeek | Claude Haiku/Sonnet/Opus | Gemini | none
         ▼
    live captions + history (browser UI)
 ```
 
 ## Setup
 
-Prereqs: Python 3.11+, [`uv`](https://github.com/astral-sh/uv), and a Modern browser.
+**Prereqs:** Python 3.11+, [`uv`](https://github.com/astral-sh/uv), and a
+modern browser. Tested on macOS and Linux; Windows is untested (Path C
+likely works as-is; Path A/B need WSL for the local C builds).
+
+Three paths depending on what you want. Pick one and follow it top to
+bottom, then start the server.
+
+### 🔌 Path A: Local ASR + cloud translation (recommended for most users)
+
+Audio stays on your machine; only translated text leaves the network.
+Combines the best local speech-to-text (BGM-capable Qwen 0.6B) with the
+cheapest practical translation (DeepSeek).
+
+Install qwen-asr:
+
+```bash
+git clone -b livesub https://github.com/nexustar/qwen-asr
+cd qwen-asr && make blas && ./download_model.sh --model small
+```
+
+`.env`:
+
+```bash
+QWEN_ASR_BIN=/abs/path/to/qwen-asr/qwen_asr
+QWEN_ASR_MODEL_DIR=/abs/path/to/qwen-asr/qwen3-asr-0.6b
+DEEPSEEK_API_KEY=sk-...                # or ANTHROPIC_API_KEY for Claude
+```
+
+### 🏠 Path B: Fully offline
+
+No cloud, no API keys. Translation requires a local LLM (Ollama or
+lm-studio) registered in `livesub.toml`; alternatively, skip translation
+by picking "None (transcript only)" in Settings.
+
+Install qwen-asr (same commands as Path A), then:
+
+`.env`:
+
+```bash
+QWEN_ASR_BIN=/abs/path/to/qwen-asr/qwen_asr
+QWEN_ASR_MODEL_DIR=/abs/path/to/qwen-asr/qwen3-asr-0.6b
+```
+
+For translation, see [Custom translate backends](#custom-translate-backends)
+below — `livesub.toml.example` ships with a ready-to-use Ollama snippet.
+
+### ☁️ Path C: Fully cloud
+
+Quickest to set up; nothing local to install. Pick speech-to-text by
+your audio content:
+
+- **Audio with background music** (concerts, anime, gaming):
+  **Qwen Cloud** (DashScope) — best quality on this content, ~$0.005/min.
+- **Voice-dominant** (podcasts, talks, interviews):
+  **OpenAI Realtime** — better accuracy when the foreground is clean
+  speech, ~$0.017/min.
+
+`.env`:
+
+```bash
+# Speech-to-text — pick one:
+DASHSCOPE_API_KEY=sk-...               # Qwen Cloud (recommended for BGM)
+OPENAI_API_KEY=sk-...                  # OpenAI Realtime (recommended for voice)
+
+# Translation — DeepSeek is the cost/quality sweet spot:
+DEEPSEEK_API_KEY=sk-...
+# OR for highest translation quality:
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### Start the server
 
 ```bash
 git clone <repo> && cd livesub
-cp .env.example .env       # edit
+cp .env.example .env       # then edit per your chosen path above
 uv sync
 uv run python server.py    # http://0.0.0.0:8000
 ```
 
-For the local Qwen ASR backend:
+### Higher-quality local alternatives
+
+For Path A / B users on a powerful machine: Qwen3-ASR **1.7B** or
+**Voxtral 4B** are more accurate than the 0.6B default but much heavier
+on RAM/VRAM. Voxtral install:
 
 ```bash
-git clone https://github.com/antirez/qwen-asr ~/lc/qwen-asr
-cd ~/lc/qwen-asr && ./download_model.sh && make blas
+git clone https://github.com/antirez/voxtral.c
+cd voxtral.c && make mps && ./download_model.sh   # mps on Apple Silicon
 ```
 
-For Voxtral ASR (larger, more accurate, multilingual):
+`.env`:
 
 ```bash
-git clone https://github.com/antirez/voxtral.c ~/lc/voxtral.c
-cd ~/lc/voxtral.c && ./download_model.sh && make mps   # mps on Apple Silicon
+VOXTRAL_BIN=/abs/path/to/voxtral.c/voxtral
+VOXTRAL_MODEL_DIR=/abs/path/to/voxtral.c/voxtral-realtime-4b
 ```
 
-## `.env`
-
-```bash
-# Cloud APIs (set the ones you want; backends without keys are hidden in the UI)
-GEMINI_API_KEY=...
-ANTHROPIC_API_KEY=sk-ant-...      # Claude Haiku / Sonnet / Opus
-DEEPSEEK_API_KEY=sk-...           # DeepSeek (uses anthropic-compatible API)
-OPENAI_API_KEY=sk-...             # OpenAI Realtime ASR + custom OpenAI-SDK
-                                  # translate backends declared in livesub.toml
-
-# Local ASR — only needed if you pick that backend in the UI
-QWEN_ASR_BIN=/path/to/qwen_asr
-QWEN_ASR_MODEL_DIR=/path/to/qwen3-asr-0.6b
-
-VOXTRAL_BIN=/path/to/voxtral
-VOXTRAL_MODEL_DIR=/path/to/voxtral-realtime-4b
-```
-
-## Custom translate backends (optional)
+## Custom translate backends
 
 Copy `livesub.toml.example` to `livesub.toml` to add your own translation
-backends — local LLMs via Ollama/lm-studio, routing services like
+backends — local LLMs via Ollama / lm-studio, routing services like
 OpenRouter, or OpenAI directly. The file is optional; without it you get
-the built-ins (Claude variants, DeepSeek, Gemini, none).
+the built-ins (Claude variants, DeepSeek, Gemini, None).
 
 ## Usage
 
 Open `http://localhost:8000`, pick **🎤 Mic** or **📺 Tab**, click
 **Start**, choose the source tab in the browser dialog. Settings (gear
-icon) let you switch ASR / translation backends, source / target
-language, and feed Claude a "scene seed" to auto-generate a glossary.
+icon) let you switch speech-to-text / translation backends, source /
+target language, and feed Claude a "scene seed" to auto-generate a
+glossary.
 
 UI layout, top to bottom (newest at the bottom — like a chat log):
 
@@ -84,4 +145,3 @@ UI layout, top to bottom (newest at the bottom — like a chat log):
    revisable by paired-translation (brief blue flash).
 4. **Live captions** — current sentence, blue tint + LIVE badge. Anchored
    at the very bottom.
-
