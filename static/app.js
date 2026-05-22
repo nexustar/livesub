@@ -227,7 +227,6 @@ let lastServerPeak = 0;
 
 // Sentence map: sid -> {sid, src, dst, srcDone, dstDone, archived}
 const sentences = new Map();
-let lastFlushedSid = -1;
 // Which sid is currently shown in the PREV zone. Sentences live in three
 // places linearly: CURRENT zone (in-flight) → PREV zone (just finalized,
 // stable, animated slide-in) → HISTORY list (older). prev_revised events
@@ -266,9 +265,16 @@ function startVU() {
       const v = Math.abs(buf[i]);
       if (v > peak) peak = v;
     }
-    // log scale, faster decay than rise
+    // Log-scaled meter (speech amplitudes are tiny on a linear scale). Fast
+    // rise (α=0.9) so spikes are visible; slow decay (α=0.15) so the eye can
+    // read them. Both branches must compare and blend in the same scale —
+    // mixing linear `peak` into the rise branch with log `smoothed` made
+    // the rise branch fire only on very loud sounds and then yank the bar
+    // *down* to the linear value.
     const target = Math.min(1, Math.max(0, (Math.log10(peak + 0.001) + 3) / 3));
-    smoothed = peak > smoothed ? peak * 0.9 + smoothed * 0.1 : smoothed * 0.85 + target * 0.15;
+    smoothed = target > smoothed
+      ? target * 0.9 + smoothed * 0.1
+      : smoothed * 0.85 + target * 0.15;
     vuFillEl.style.width = `${Math.min(100, smoothed * 100)}%`;
     vuRafId = requestAnimationFrame(tick);
   };
@@ -321,13 +327,6 @@ function render() {
   const display = current || newestUnarchived;
   transcriptEl.textContent = display ? display.src : "";
   translationEl.textContent = display ? display.dst : "";
-  // GC archived sentences (kept from old archiveCompleted, simplified).
-  if (sentences.size > 100) {
-    const archived = [...sentences.values()].filter(s => s.archived).sort((a, b) => a.sid - b.sid);
-    while (sentences.size > 50 && archived.length > 0) {
-      sentences.delete(archived.shift().sid);
-    }
-  }
 }
 
 // Promote a finalized sentence into the PREV zone. The sentence currently
@@ -653,15 +652,11 @@ async function start() {
           }
           break;
         case "asr_session": {
-          // asr_session events: {state: "open"|"reset"|"go_away"}
-          if (msg.state === "open") {
-            asrSessionCount++;
-            setStatus(`listening (asr #${asrSessionCount})`);
-          } else if (msg.state === "reset") {
-            setStatus(`listening (resetting asr)`);
-          } else if (msg.state === "go_away") {
-            setStatus(`listening (server migrating)`);
-          }
+          // asr_session events: {state: "open"|"reset"|"go_away"}.
+          // Status bar stays at "listening" — the per-turn counter was
+          // diagnostic noise for normal users (Gemini Live increments it
+          // every sentence). The debug badge still reflects the count.
+          if (msg.state === "open") asrSessionCount++;
           updateBadges();
           break;
         }

@@ -281,18 +281,20 @@ def _list_translate_backends() -> list[dict]:
 
 def _list_asr_backends() -> list[dict]:
     """ASR dropdown contents — cloud backends gated by API key, local ones
-    gated by binary + model dir presence."""
+    gated by binary + model dir presence. Local backends listed first so
+    they're the default on a fresh install when both local and cloud are
+    available."""
     out: list[dict] = []
-    if os.environ.get("GEMINI_API_KEY"):
-        out.append({"id": "gemini", "label": "Gemini Live"})
-    if OPENAI_API_KEY:
-        out.append({"id": "openai-realtime", "label": "OpenAI Realtime"})
-    if DASHSCOPE_API_KEY:
-        out.append({"id": "qwen-cloud", "label": "Qwen ASR (Cloud)"})
     if _local_asr_available(QWEN_BIN, QWEN_MODEL_DIR):
         out.append({"id": "qwen", "label": "Qwen (local)"})
     if _local_asr_available(VOXTRAL_BIN, VOXTRAL_MODEL_DIR):
         out.append({"id": "voxtral", "label": "Voxtral (local)"})
+    if DASHSCOPE_API_KEY:
+        out.append({"id": "qwen-cloud", "label": "Qwen ASR (Cloud)"})
+    if OPENAI_API_KEY:
+        out.append({"id": "openai-realtime", "label": "OpenAI Realtime"})
+    if os.environ.get("GEMINI_API_KEY"):
+        out.append({"id": "gemini", "label": "Gemini Live"})
     return out
 
 
