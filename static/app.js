@@ -721,12 +721,27 @@ async function stop() {
     try { ws.close(); } catch {}
     ws = null;
   }
-  // Stop: archive whatever's still live. Anything in PREV stays visible
-  // (it's already a stable rendering of the last sentence — pushing it
-  // to history on stop would be more disruptive than helpful).
-  for (const [, s] of sentences) {
-    s.srcDone = true;
-    s.dstDone = true;
+  // Push the PREV card's content into history, then drop all sentence
+  // state. The server resets `next_sid` to 0 on every new WS connection,
+  // so without this clear the next session's transcripts for sid=0/1/...
+  // would `getOrCreate` and resurrect the previously-archived entries —
+  // new content gets routed into stale `srcDone:true` records, render()
+  // can't promote them as "current", and the UI shows empty captions
+  // with old prev+history below. Strip data-sid off existing history
+  // items for the same reason: the next session's `prev_revised` events
+  // (sids start at 0 again) would otherwise target the wrong DOM nodes.
+  if (prevSlotSid !== null) {
+    const oldPrev = sentences.get(prevSlotSid);
+    if (oldPrev) appendToHistory(oldPrev);
+    prevCardEl.hidden = true;
+    prevCardEl.classList.remove("entering");
+    prevTranscriptEl.textContent = "";
+    prevTranslationEl.textContent = "";
+    prevSlotSid = null;
+  }
+  sentences.clear();
+  for (const item of historyEl.querySelectorAll(".history-item[data-sid]")) {
+    item.removeAttribute("data-sid");
   }
   transcriptEl.textContent = "";
   translationEl.textContent = "";
