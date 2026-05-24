@@ -89,25 +89,25 @@
       <label for="target-lang">Target language</label>
       <input id="target-lang" type="text" placeholder="Chinese (Simplified)">
     </div>
-    <div class="row span2">
+    <div class="row span2" id="scene-seed-row">
       <label for="scene-seed">
-        Scene seed
-        <span class="muted">— a URL, topic, or short phrase; Claude (with web search) fills the two fields below</span>
+        Topic for research <span class="muted">(optional)</span>
+        <span class="muted">— web searches to fill Scene + Glossary below, improving caption accuracy</span>
       </label>
       <div class="hint-scene-row">
         <input id="scene-seed" type="text"
           placeholder="e.g. μ's Final Live concert; ICASSP 2026 keynote; FromSoftware Elden Ring stream">
-        <button id="hint-generate" class="secondary" type="button">✨ Generate</button>
+        <button id="hint-generate" class="secondary" type="button">✨ Research</button>
       </div>
       <span id="hint-status" class="muted"></span>
     </div>
     <div class="row span2">
-      <label for="scene">Scene summary <span class="muted">(given to translator as background)</span></label>
+      <label for="scene">Scene summary <span class="muted">(optional) — scenario, tone, or any other notes for the translator</span></label>
       <textarea id="scene" rows="3"
         placeholder="e.g. Live concert by Japanese idol group μ's; use casual Chinese fan-slang and preserve idol terminology like 推し / ペンライト."></textarea>
     </div>
     <div class="row span2">
-      <label for="glossary">Glossary <span class="muted">(comma-separated terms, given to ASR as a soft prompt)</span></label>
+      <label for="glossary">Glossary <span class="muted">(optional) — names and specialty terms in the source language, comma-separated; biases speech recognition toward them</span></label>
       <textarea id="glossary" rows="4"
         placeholder="高坂穂乃果, 絢瀬絵里, μ's, アンコール, ペンライト, ..."></textarea>
     </div>

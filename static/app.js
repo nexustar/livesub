@@ -132,6 +132,12 @@ async function loadBackends() {
   let savedTr = localStorage.getItem(LS_TR);
   if (savedTr === "claude") savedTr = "claude-haiku";
   populateBackendSelect(translateBackendSel, data.translate || [], savedTr);
+  // Hide the topic/Research row entirely if no hints backend is configured.
+  // Manually-filled Scene + Glossary fields stay — they work independently.
+  if (!data.hints_available) {
+    const row = document.getElementById("scene-seed-row");
+    if (row) row.hidden = true;
+  }
 }
 loadBackends();
 
@@ -153,7 +159,7 @@ async function generateHintsFromScene() {
     return;
   }
   hintGenerateBtn.disabled = true;
-  hintStatusEl.textContent = "Researching with Claude (may take 5–15s)…";
+  hintStatusEl.textContent = "Researching (may take 5–15s)…";
   hintStatusEl.className = "muted busy";
   try {
     const res = await fetch("/api/hints", {
@@ -180,8 +186,11 @@ async function generateHintsFromScene() {
     const tail = data.searches_used
       ? ` (${data.searches_used} web search${data.searches_used === 1 ? "" : "es"})`
       : "";
+    const via = data.backend
+      ? ` via ${data.backend.charAt(0).toUpperCase() + data.backend.slice(1)}`
+      : "";
     hintStatusEl.textContent =
-      `Generated scene (${scene.length}ch) + glossary (${glossary.length}ch)${tail}. Edit below as needed.`;
+      `Generated${via}: scene (${scene.length}ch) + glossary (${glossary.length}ch)${tail}. Edit below as needed.`;
     hintStatusEl.className = "muted ok";
   } catch (e) {
     console.error(e);

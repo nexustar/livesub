@@ -193,10 +193,19 @@ def _get_translate_backend(backend_id: str) -> dict | None:
 # explicitly keeps behavior consistent across backends.
 ANTHROPIC_EXTRA_BODY = {"thinking": {"type": "disabled"}}
 
-# /api/hints (scene-seed → glossary research) is Claude-specific: the
-# prompt and Anthropic web_search tool are tied to Claude, and the prompt
-# was tuned against Haiku. Hardcoded; not user-selectable.
-HINTS_MODEL = "claude-haiku-4-5"
+# /api/hints (scene-seed → glossary research) supports two backends.
+# Gemini is preferred when GEMINI_API_KEY is set: google_search grounding is
+# backed by actual Google Search, has the best long-tail coverage for
+# concrete events/people/anime, and Gemini Flash is cheaper than Claude.
+# Claude is the fallback when only ANTHROPIC_API_KEY is set. The prompt
+# template (build_hints_system_prompt) is backend-agnostic — same [SCENE]/
+# [GLOSSARY] format for both. HINTS_BACKEND=gemini|claude env var forces
+# a specific backend; default "auto" picks per available key.
+HINTS_BACKEND = os.environ.get("HINTS_BACKEND", "auto").strip().lower()
+HINTS_CLAUDE_MODEL = "claude-sonnet-4-6"
+# Full-size Flash supports google_search grounding; -lite variants don't
+# reliably. Override only if you know the target model supports it.
+HINTS_GEMINI_MODEL = os.environ.get("HINTS_GEMINI_MODEL", "gemini-2.5-flash")
 
 DEFAULT_TARGET_LANG = "Chinese (Simplified)"
 HISTORY_PAIRS = 5
@@ -319,6 +328,11 @@ async def list_backends():
     return {
         "asr": _list_asr_backends(),
         "translate": _list_translate_backends(),
+        # Whether /api/hints can serve a request (any usable hints backend
+        # configured). Frontend uses this to hide the scene-seed row when
+        # neither GEMINI_API_KEY nor ANTHROPIC_API_KEY is set, since the
+        # Research button would just error.
+        "hints_available": _pick_hints_backend() is not None,
     }
 
 
@@ -347,7 +361,7 @@ def build_hints_system_prompt(source_lang: str) -> str:
             f"{src} tokens. Entries in any other language (including the "
             f"target translation language) are useless and may distort "
             f"recognition. If you only know an entry's English / Chinese "
-            f"transliteration, use web_search to find the {src} original "
+            f"transliteration, search the web to find the {src} original "
             f"(or omit it)."
         )
         glossary_lang_hint = f", all in {src}"
@@ -368,7 +382,7 @@ def build_hints_system_prompt(source_lang: str) -> str:
         "level — the prompt language MUST match the audio language for the "
         "bias to work.\n\n"
         "Rules:\n"
-        "- USE web_search when the input refers to a specific real-world "
+        "- Search the web when the input refers to a specific real-world "
         "thing (concert, show, person, event, anime, sports, technical "
         "topic). Don't fabricate; only list what you verify or know.\n"
         "- For generic scenarios where research adds nothing, just answer "
@@ -383,12 +397,120 @@ def build_hints_system_prompt(source_lang: str) -> str:
     )
 
 
+def _parse_hints_response(raw: str) -> tuple[str, str]:
+    """Extract [SCENE] and [GLOSSARY] blocks from a hints model response.
+    Falls back to treating the whole text as glossary when neither delimiter
+    block parses (some models occasionally skip the wrappers under brief
+    inputs). Same regex for Claude and Gemini paths — template is shared."""
+    scene_m = re.search(r"\[SCENE\]\s*(.*?)\s*\[/SCENE\]", raw, re.DOTALL)
+    gloss_m = re.search(r"\[GLOSSARY\]\s*(.*?)\s*\[/GLOSSARY\]", raw, re.DOTALL)
+    scene = scene_m.group(1).strip() if scene_m else ""
+    glossary = gloss_m.group(1).strip() if gloss_m else ""
+    if not scene and not glossary:
+        glossary = raw
+    return scene, glossary
+
+
+def _pick_hints_backend() -> str | None:
+    """Return 'gemini' / 'claude' / None based on env override and keys.
+    Default priority gemini > claude — Gemini grounding uses real Google
+    Search (better long-tail coverage for concrete events/names) and Flash
+    is cheaper than Haiku."""
+    if HINTS_BACKEND == "gemini":
+        return "gemini" if GEMINI_API_KEY else None
+    if HINTS_BACKEND == "claude":
+        return "claude" if (ANTHROPIC_API_KEY and anthropic is not None) else None
+    # auto / anything-else: try gemini first, claude second.
+    if GEMINI_API_KEY:
+        return "gemini"
+    if ANTHROPIC_API_KEY and anthropic is not None:
+        return "claude"
+    return None
+
+
+async def _generate_hints_claude(description: str, source_lang: str) -> dict:
+    """Run the hints flow via Claude Haiku + Anthropic's web_search tool."""
+    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    msg = await client.messages.create(
+        model=HINTS_CLAUDE_MODEL,
+        max_tokens=1024,
+        system=build_hints_system_prompt(source_lang),
+        tools=[{
+            # Anthropic's server-side web search tool. Claude decides when to
+            # call it; max_uses caps cost.
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": 3,
+        }],
+        messages=[{"role": "user", "content": f"Scene description: {description}"}],
+    )
+    # Concatenate all text blocks; skip tool_use blocks.
+    text_parts: list[str] = []
+    searches_used = 0
+    for block in msg.content:
+        btype = getattr(block, "type", None)
+        if btype == "text":
+            text_parts.append(block.text)
+        elif btype == "server_tool_use" and getattr(block, "name", "") == "web_search":
+            searches_used += 1
+    scene, glossary = _parse_hints_response("".join(text_parts).strip())
+    return {
+        "scene": scene, "glossary": glossary,
+        "searches_used": searches_used,
+        "model": HINTS_CLAUDE_MODEL,
+        "stop_reason": msg.stop_reason,
+    }
+
+
+async def _generate_hints_gemini(description: str, source_lang: str) -> dict:
+    """Run the hints flow via Gemini Flash + google_search grounding. SDK
+    shape parallels the existing _translate_one_gemini call path — the only
+    new piece is the tools=[Tool(google_search=GoogleSearch())] config and
+    pulling grounding_metadata for the search-count log."""
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    config = types.GenerateContentConfig(
+        system_instruction=build_hints_system_prompt(source_lang),
+        tools=[types.Tool(google_search=types.GoogleSearch())],
+    )
+    resp = await client.aio.models.generate_content(
+        model=HINTS_GEMINI_MODEL,
+        contents=f"Scene description: {description}",
+        config=config,
+    )
+    raw = (resp.text or "").strip()
+    # web_search_queries is the list of actual queries Gemini issued — its
+    # length is the analogue of Claude's server_tool_use count.
+    searches_used = 0
+    finish_reason: str | None = None
+    try:
+        cand = resp.candidates[0]
+        finish_reason = str(getattr(cand, "finish_reason", "") or "") or None
+        gm = getattr(cand, "grounding_metadata", None)
+        if gm is not None:
+            queries = getattr(gm, "web_search_queries", None) or []
+            searches_used = len(queries)
+    except (AttributeError, IndexError):
+        pass
+    scene, glossary = _parse_hints_response(raw)
+    return {
+        "scene": scene, "glossary": glossary,
+        "searches_used": searches_used,
+        "model": HINTS_GEMINI_MODEL,
+        "stop_reason": finish_reason,
+    }
+
+
 @app.post("/api/hints")
 async def generate_hints(request: Request):
-    if anthropic is None:
-        return JSONResponse({"error": "anthropic SDK not installed"}, status_code=500)
-    if not ANTHROPIC_API_KEY:
-        return JSONResponse({"error": "ANTHROPIC_API_KEY not set"}, status_code=500)
+    backend = _pick_hints_backend()
+    if backend is None:
+        return JSONResponse({
+            "error": (
+                "Hint generation requires GEMINI_API_KEY or "
+                "ANTHROPIC_API_KEY. Set one in .env and restart, "
+                "or fill Scene/Glossary manually below."
+            ),
+        }, status_code=500)
     try:
         body = await request.json()
     except Exception:
@@ -400,58 +522,32 @@ async def generate_hints(request: Request):
         return JSONResponse({"error": "description too long (>500 chars)"}, status_code=400)
     source_lang = (body.get("source_lang") or "").strip()
 
-    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
     log.info(
-        "generating hints for scene: %r (source_lang=%r)",
-        description[:100], source_lang or "auto",
+        "generating hints via %s for scene: %r (source_lang=%r)",
+        backend, description[:100], source_lang or "auto",
     )
     try:
-        msg = await client.messages.create(
-            model=HINTS_MODEL,
-            max_tokens=1024,
-            system=build_hints_system_prompt(source_lang),
-            tools=[{
-                # Anthropic's server-side web search tool. Claude decides when to
-                # call it; max_uses caps cost.
-                "type": "web_search_20250305",
-                "name": "web_search",
-                "max_uses": 3,
-            }],
-            messages=[{"role": "user", "content": f"Scene description: {description}"}],
-        )
+        if backend == "gemini":
+            result = await _generate_hints_gemini(description, source_lang)
+        else:
+            result = await _generate_hints_claude(description, source_lang)
     except Exception as e:
-        log.exception("hint generation API call failed")
-        return JSONResponse({"error": str(e)}, status_code=502)
-
-    # Concatenate all text blocks. Claude may emit tool_use blocks too — those are
-    # not text and we skip them. We want the final text response.
-    text_parts = []
-    searches_used = 0
-    for block in msg.content:
-        btype = getattr(block, "type", None)
-        if btype == "text":
-            text_parts.append(block.text)
-        elif btype == "server_tool_use" and getattr(block, "name", "") == "web_search":
-            searches_used += 1
-    raw = "".join(text_parts).strip()
-
-    scene_m = re.search(r"\[SCENE\]\s*(.*?)\s*\[/SCENE\]", raw, re.DOTALL)
-    gloss_m = re.search(r"\[GLOSSARY\]\s*(.*?)\s*\[/GLOSSARY\]", raw, re.DOTALL)
-    scene = scene_m.group(1).strip() if scene_m else ""
-    glossary = gloss_m.group(1).strip() if gloss_m else ""
-    if not scene and not glossary:
-        # Model didn't follow format — use raw output as glossary fallback.
-        glossary = raw
+        log.exception("hint generation via %s failed", backend)
+        return JSONResponse(
+            {"error": str(e), "backend": backend}, status_code=502,
+        )
 
     log.info(
-        "hints generated: scene=%dch glossary=%dch %d web searches stop=%s",
-        len(scene), len(glossary), searches_used, msg.stop_reason,
+        "hints generated via %s: scene=%dch glossary=%dch %d web searches stop=%s",
+        backend, len(result["scene"]), len(result["glossary"]),
+        result["searches_used"], result.get("stop_reason"),
     )
     return JSONResponse({
-        "scene": scene,
-        "glossary": glossary,
-        "searches_used": searches_used,
-        "model": HINTS_MODEL,
+        "scene": result["scene"],
+        "glossary": result["glossary"],
+        "searches_used": result["searches_used"],
+        "model": result["model"],
+        "backend": backend,
     })
 
 
