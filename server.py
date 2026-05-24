@@ -264,7 +264,13 @@ VOXTRAL_MODEL_DIR = os.environ.get(
 # `-I <secs>`: latency / efficiency knob, voxtral's own default is 2.0.
 VOXTRAL_INTERVAL_SEC = float(os.environ.get("VOXTRAL_INTERVAL_SEC", "2.0"))
 
-QWEN_MODEL_DIR = os.environ.get("QWEN_ASR_MODEL_DIR", "qwen3-asr-0.6b")
+# Two qwen3-asr variants ship in the same binary; only the model dir
+# differs. Users wire whichever (or both) they downloaded with
+# `./download_model.sh --model small|large` in qwen-asr. Each one that
+# resolves to an existing directory shows up as its own ASR option in the
+# UI — small is faster + lighter, large is more accurate.
+QWEN_MODEL_DIR_SMALL = os.environ.get("QWEN_ASR_MODEL_DIR_SMALL", "")
+QWEN_MODEL_DIR_LARGE = os.environ.get("QWEN_ASR_MODEL_DIR_LARGE", "")
 
 STATIC_DIR = Path(__file__).parent / "static"
 # Hard punctuation: cut here whenever it appears (sentence terminators).
@@ -290,8 +296,17 @@ def _local_asr_available(bin_path: str, model_dir: str) -> bool:
     """A local ASR backend is available iff its binary is callable (on PATH
     or an absolute file) AND its model directory exists. Both have to be
     true — a binary without weights crashes on first audio chunk."""
+    if not model_dir:
+        return False
     bin_ok = bool(shutil.which(bin_path)) or Path(bin_path).is_file()
     return bin_ok and Path(model_dir).exists()
+
+
+def _qwen_model_dir_for(backend_id: str) -> str:
+    """Map qwen-small/qwen-large backend id → the configured model dir."""
+    if backend_id == "qwen-large":
+        return QWEN_MODEL_DIR_LARGE
+    return QWEN_MODEL_DIR_SMALL
 
 
 def _list_translate_backends() -> list[dict]:
@@ -310,8 +325,10 @@ def _list_asr_backends() -> list[dict]:
     they're the default on a fresh install when both local and cloud are
     available."""
     out: list[dict] = []
-    if _local_asr_available(QWEN_BIN, QWEN_MODEL_DIR):
-        out.append({"id": "qwen", "label": "Qwen (local)"})
+    if _local_asr_available(QWEN_BIN, QWEN_MODEL_DIR_SMALL):
+        out.append({"id": "qwen-small", "label": "Qwen (small, local)"})
+    if _local_asr_available(QWEN_BIN, QWEN_MODEL_DIR_LARGE):
+        out.append({"id": "qwen-large", "label": "Qwen (large, local)"})
     if _local_asr_available(VOXTRAL_BIN, VOXTRAL_MODEL_DIR):
         out.append({"id": "voxtral", "label": "Voxtral (local)"})
     if DASHSCOPE_API_KEY:
@@ -885,7 +902,7 @@ class Pipeline:
 
     async def asr_worker(self):
         try:
-            if self.asr_backend == "qwen":
+            if self.asr_backend in ("qwen-small", "qwen-large"):
                 await self._qwen_asr_worker()
             elif self.asr_backend == "voxtral":
                 await self._voxtral_asr_worker()
@@ -923,13 +940,18 @@ class Pipeline:
                 ),
             })
             return
-        if not Path(QWEN_MODEL_DIR).exists():
+        model_dir = _qwen_model_dir_for(self.asr_backend)
+        env_name = (
+            "QWEN_ASR_MODEL_DIR_LARGE" if self.asr_backend == "qwen-large"
+            else "QWEN_ASR_MODEL_DIR_SMALL"
+        )
+        if not model_dir or not Path(model_dir).exists():
             await self._safe_send_json({
                 "type": "error",
                 "message": (
-                    f"qwen-asr model dir not found at {QWEN_MODEL_DIR!r}. "
-                    "Run ./download_model.sh in the qwen-asr repo and set "
-                    "QWEN_ASR_MODEL_DIR env var to point at it."
+                    f"qwen-asr model dir not found for {self.asr_backend} "
+                    f"(checked {model_dir!r}). Run ./download_model.sh in "
+                    f"the qwen-asr repo and set {env_name} env var."
                 ),
             })
             return
@@ -940,7 +962,7 @@ class Pipeline:
         # output until EOF. We discard stderr separately below.
         qwen_cmd = [
             bin_path,
-            "-d", QWEN_MODEL_DIR,
+            "-d", model_dir,
             "--stdin",
             "--stream",
             "--stream-max-new-tokens", "32",
@@ -2754,8 +2776,8 @@ if __name__ == "__main__":
         log.error(
             "no ASR backend configured — set at least one of "
             "GEMINI_API_KEY / OPENAI_API_KEY / DASHSCOPE_API_KEY, or point "
-            "QWEN_ASR_BIN+QWEN_ASR_MODEL_DIR / VOXTRAL_BIN+VOXTRAL_MODEL_DIR "
-            "at a local binary"
+            "QWEN_ASR_BIN+QWEN_ASR_MODEL_DIR_SMALL (or _LARGE) / "
+            "VOXTRAL_BIN+VOXTRAL_MODEL_DIR at a local binary"
         )
         sys.exit(1)
     log.info(

@@ -46,7 +46,7 @@ cd qwen-asr && make blas && ./download_model.sh --model small
 
 ```bash
 QWEN_ASR_BIN=/abs/path/to/qwen-asr/qwen_asr
-QWEN_ASR_MODEL_DIR=/abs/path/to/qwen-asr/qwen3-asr-0.6b
+QWEN_ASR_MODEL_DIR_SMALL=/abs/path/to/qwen-asr/qwen3-asr-0.6b
 DEEPSEEK_API_KEY=sk-...                # or ANTHROPIC_API_KEY for Claude
 ```
 
@@ -62,7 +62,7 @@ Install qwen-asr (same commands as Path A), then:
 
 ```bash
 QWEN_ASR_BIN=/abs/path/to/qwen-asr/qwen_asr
-QWEN_ASR_MODEL_DIR=/abs/path/to/qwen-asr/qwen3-asr-0.6b
+QWEN_ASR_MODEL_DIR_SMALL=/abs/path/to/qwen-asr/qwen3-asr-0.6b
 ```
 
 For translation, see [Custom translate backends](#custom-translate-backends)
@@ -105,7 +105,23 @@ uv run python server.py    # http://0.0.0.0:8000
 
 For Path A / B users on a powerful machine: Qwen3-ASR **1.7B** or
 **Voxtral 4B** are more accurate than the 0.6B default but much heavier
-on RAM/VRAM. Voxtral install:
+on RAM/VRAM.
+
+Qwen 1.7B (same binary as the 0.6B, just a different model):
+
+```bash
+cd qwen-asr && ./download_model.sh --model large
+```
+
+```bash
+QWEN_ASR_BIN=/abs/path/to/qwen-asr/qwen_asr
+QWEN_ASR_MODEL_DIR_LARGE=/abs/path/to/qwen-asr/qwen3-asr-1.7b
+```
+
+Both `_SMALL` and `_LARGE` can be set at the same time — each shows up
+as its own option in the Settings → Speech-to-text dropdown.
+
+Voxtral install:
 
 ```bash
 git clone https://github.com/antirez/voxtral.c
