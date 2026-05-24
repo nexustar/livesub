@@ -10,7 +10,8 @@ const historyEl = document.getElementById("history");
 const settingsToggleBtn = document.getElementById("settings-toggle");
 const settingsPanel = document.getElementById("settings-panel");
 const targetLangInput = document.getElementById("target-lang");
-const sourceLangInput = document.getElementById("source-lang");
+const sourceLangSel = document.getElementById("source-lang-select");
+const sourceLangInput = document.getElementById("source-lang-input");
 const sceneSeedInput = document.getElementById("scene-seed");
 const sceneInput = document.getElementById("scene");
 const glossaryInput = document.getElementById("glossary");
@@ -38,7 +39,24 @@ const LS_DEBUG = "livesub.debugMode";
 const LS_FONT_LARGE = "livesub.fontLarge";
 
 targetLangInput.value = localStorage.getItem(LS_LANG) || "Chinese (Simplified)";
-sourceLangInput.value = localStorage.getItem(LS_SRC) || "auto";
+// Source-lang has two visible elements (see HTML): a <select> for normal
+// mode and a free-text <input> for debug mode. Both bind to the same
+// localStorage key. If the persisted value isn't one of the select's
+// intersection-language options (e.g. user previously typed "Cantonese" in
+// debug mode), keep it in the input but default the visible select to auto
+// so the user isn't staring at a blank dropdown.
+const savedSrc = localStorage.getItem(LS_SRC) || "auto";
+sourceLangInput.value = savedSrc;
+sourceLangSel.value = [...sourceLangSel.options].some(o => o.value === savedSrc)
+  ? savedSrc : "auto";
+
+function currentSourceLang() {
+  // Whichever element is currently visible is the source of truth at the
+  // moment Start is pressed (or hints are generated).
+  const v = document.body.classList.contains("debug-mode")
+    ? sourceLangInput.value : sourceLangSel.value;
+  return (v || "auto").trim();
+}
 inputSourceSel.value = localStorage.getItem(LS_INPUT) || "mic";
 sceneSeedInput.value = localStorage.getItem(LS_SCENE_SEED) || "";
 sceneInput.value = localStorage.getItem(LS_SCENE) || "";
@@ -147,7 +165,7 @@ async function generateHintsFromScene() {
         // qwen-asr's --prompt as a token-level bias; if it's in a different
         // language than the audio, the bias is wasted (and may distort
         // recognition). "auto" leaves Claude to infer from description.
-        source_lang: (sourceLangInput.value || "auto").trim(),
+        source_lang: currentSourceLang(),
       }),
     });
     const data = await res.json();
@@ -189,8 +207,18 @@ translateBackendSel.addEventListener("change", () => {
 targetLangInput.addEventListener("input", () => {
   localStorage.setItem(LS_LANG, targetLangInput.value);
 });
+sourceLangSel.addEventListener("change", () => {
+  localStorage.setItem(LS_SRC, sourceLangSel.value);
+  // Keep input synced so flipping into debug mode doesn't lose the choice.
+  sourceLangInput.value = sourceLangSel.value;
+});
 sourceLangInput.addEventListener("input", () => {
   localStorage.setItem(LS_SRC, sourceLangInput.value);
+  // Mirror into select only when the typed value is one of its options —
+  // exotic values (Cantonese / Thai / ...) leave the select on auto.
+  if ([...sourceLangSel.options].some(o => o.value === sourceLangInput.value)) {
+    sourceLangSel.value = sourceLangInput.value;
+  }
 });
 
 settingsToggleBtn.addEventListener("click", () => {
@@ -200,6 +228,7 @@ settingsToggleBtn.addEventListener("click", () => {
 
 function lockSettings(locked) {
   targetLangInput.disabled = locked;
+  sourceLangSel.disabled = locked;
   sourceLangInput.disabled = locked;
   sceneSeedInput.disabled = locked;
   sceneInput.disabled = locked;
@@ -529,7 +558,7 @@ async function start() {
       ws.send(JSON.stringify({
         type: "config",
         target_lang: (targetLangInput.value || "Chinese (Simplified)").trim(),
-        source_lang: (sourceLangInput.value || "auto").trim(),
+        source_lang: currentSourceLang(),
         scene: sceneInput.value.trim(),
         glossary: glossaryInput.value.trim(),
         asr_backend: asrBackendSel.value || "gemini",

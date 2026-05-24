@@ -64,6 +64,22 @@ DASHSCOPE_REALTIME_MODEL = os.environ.get(
 DASHSCOPE_VAD_THRESHOLD = float(
     os.environ.get("DASHSCOPE_VAD_THRESHOLD", "0.5")
 )
+
+# ISO-639-1 codes for the source-language hint passed to cloud ASR backends
+# (openai-realtime, qwen-cloud). Covers the 11 languages that qwen3-asr-flash-
+# realtime supports — the smallest superset across hint-accepting backends, so
+# anything in this map works on every cloud backend. openai-realtime is
+# Whisper under the hood and accepts ~70 ISO codes if you pass them directly;
+# qwen-local takes natural names verbatim and ignores this map. Keys are
+# lowercased natural-language names matching the frontend <select> values.
+# Unknown keys fall through (pass-through) so debug-mode users typing freeform
+# values still reach the upstream API.
+SOURCE_LANG_ISO = {
+    "chinese": "zh", "english": "en", "japanese": "ja", "korean": "ko",
+    "spanish": "es", "french": "fr", "german": "de", "italian": "it",
+    "portuguese": "pt", "arabic": "ar", "russian": "ru",
+}
+
 DEEPSEEK_BASE_URL = os.environ.get(
     "DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic"
 )
@@ -1238,15 +1254,11 @@ class Pipeline:
                     # model is cutting mid-clause.
                     src = (self.source_lang or "").strip().lower()
                     transcription_cfg: dict = {"model": OPENAI_REALTIME_MODEL}
-                    # OpenAI expects ISO-639-1 codes. Map the common names
-                    # from the UI's datalist; fall back to passing through
-                    # when the user typed something we don't know.
-                    iso = {
-                        "japanese": "ja", "english": "en", "chinese": "zh",
-                        "korean": "ko", "spanish": "es",
-                    }.get(src)
+                    # OpenAI expects ISO-639-1. Normal-mode UI sends one of
+                    # the SOURCE_LANG_ISO keys; debug-mode free-text falls
+                    # through unchanged (Whisper accepts ~70 codes natively).
                     if src and src != "auto":
-                        transcription_cfg["language"] = iso or src
+                        transcription_cfg["language"] = SOURCE_LANG_ISO.get(src, src)
                     # NOTE: gpt-realtime-whisper rejects `turn_detection` —
                     # it streams deltas continuously without turn boundaries.
                     # livecap's own punctuation/length-based sentence cutting
@@ -1436,10 +1448,6 @@ class Pipeline:
                     # OpenAI's: input_audio_format and sample_rate are flat
                     # fields on `session`, not nested under audio.input.
                     src = (self.source_lang or "").strip().lower()
-                    iso = {
-                        "japanese": "ja", "english": "en", "chinese": "zh",
-                        "korean": "ko", "spanish": "es",
-                    }.get(src)
                     session_cfg: dict = {
                         "modalities": ["text"],
                         "input_audio_format": "pcm",
@@ -1452,7 +1460,7 @@ class Pipeline:
                     }
                     if src and src != "auto":
                         session_cfg["input_audio_transcription"] = {
-                            "language": iso or src,
+                            "language": SOURCE_LANG_ISO.get(src, src),
                         }
                     await ws.send(json.dumps({
                         "type": "session.update",

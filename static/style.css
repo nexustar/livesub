@@ -129,6 +129,12 @@ button .icon { line-height: 1; }
    users. Settings → "Debug mode" toggles body.debug-mode to reveal them. */
 body:not(.debug-mode) #controls .badge { display: none; }
 
+/* Source-language input: <select> in normal mode (11-language intersection
+   of all hint-accepting backends), free-text <input> with extra suggestions
+   in debug mode (qwen-local's extra langs, Whisper's 70+ pass-through). */
+body:not(.debug-mode) #source-lang-input { display: none; }
+body.debug-mode #source-lang-select { display: none; }
+
 /* ───────── Settings panel (two-column grid) ───────── */
 
 /* Settings-open is a modal-ish view: panel grows to fill the
@@ -188,6 +194,19 @@ body.settings-open #history { display: none; }
   font-size: 13px;
   resize: vertical;
 }
+/* Native <select> rendering adds extra vertical padding for the dropdown
+   arrow chrome, making it visibly taller than sibling <input>s even with
+   matching padding. Strip the native widget and draw our own chevron so all
+   three selects (asr-backend / translate-backend / source-lang-select) line
+   up with the inputs. Inline SVG keeps it self-contained. */
+#settings-panel select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 24px;
+}
 #settings-panel input:focus,
 #settings-panel textarea:focus,
 #settings-panel select:focus {
@@ -199,12 +218,6 @@ body.settings-open #history { display: none; }
 #settings-panel select:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-}
-#settings-panel .hint {
-  grid-column: 1 / -1;
-  color: #666;
-  font-size: 11px;
-  margin: 0;
 }
 
 .hint-scene-row {
