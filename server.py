@@ -960,6 +960,9 @@ class Pipeline:
         # out the streaming token callback (qwen_set_token_callback(ctx,NULL))
         # — i.e. it disables per-token fflush'ing to stdout, so we'd never see
         # output until EOF. We discard stderr separately below.
+        # 4s beats the binary's 2s default for speed and latency on
+        # mainstream hardware; 0.6B is fine on 2s, so don't override.
+        chunk_sec = "4" if self.asr_backend == "qwen-large" else ""
         qwen_cmd = [
             bin_path,
             "-d", model_dir,
@@ -993,6 +996,8 @@ class Pipeline:
         qwen_prompt = build_qwen_prompt(self.glossary)
         if qwen_prompt:
             qwen_cmd.extend(["--prompt", qwen_prompt])
+        if chunk_sec:
+            qwen_cmd.extend(["--stream-chunk-sec", chunk_sec])
 
         # qwen-asr block-buffers stdout when piped (no TTY), so transcript
         # tokens don't reach us until ~4KB accumulate. Wrap with stdbuf to
