@@ -71,28 +71,6 @@ export function parseHintsResponse(raw: string): { scene: string; glossary: stri
 
 // ---------- ASR / translation prompts ----------
 
-export function buildAsrPrompt(sourceLang: string, scene: string, glossary: string): string {
-  const src = (sourceLang || "").trim().toLowerCase();
-  let langHint: string;
-  if (src === "" || src === "auto") {
-    langHint = "The audio may be in any language; detect it automatically.";
-  } else {
-    langHint =
-      `The audio is primarily in ${sourceLang}. Transcribe spoken ` +
-      `${sourceLang} accurately, even if there is background music, ` +
-      "applause, sound effects, or multiple voices.";
-  }
-  let base =
-    "You are a passive listener. Your only job is to allow accurate input " +
-    "transcription of the audio you receive. " +
-    `${langHint} ` +
-    "Stay completely silent. Do not respond. Do not generate any audio " +
-    "output. Just listen.";
-  if (scene) base += `\n\nScene: ${scene}`;
-  if (glossary) base += `\n\nGlossary (proper nouns / specialty terms): ${glossary}`;
-  return base;
-}
-
 // qwen-asr --prompt: terminology / spelling bias for the decoder. Glossary
 // only — NOT scene (mixing target-language scene text confuses qwen's language
 // detection). Capped at 500 chars.

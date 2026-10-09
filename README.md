@@ -15,7 +15,7 @@ underlying pipeline supports.
         ▼
     [ Speech-to-text ] ← Qwen3-ASR (local, BGM-capable) | Qwen Cloud | OpenAI Realtime | Voxtral (local) | Gemini Live
         ▼
-    [ Translator ]     ← Local LLM (Ollama, lm-studio) | DeepSeek | Claude Haiku/Sonnet/Opus | Gemini | none
+    [ Translator ]     ← Local LLM (Ollama, lm-studio) | DeepSeek | Claude Haiku/Sonnet | Gemini | none
         ▼
    live captions + history (browser UI)
 ```

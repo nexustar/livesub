@@ -46,8 +46,11 @@ export function resolveRel(p: string): string {
 }
 
 export const GEMINI_API_KEY = env("GEMINI_API_KEY");
-export const ASR_MODEL = env("GEMINI_ASR_MODEL", "gemini-2.5-flash-native-audio-latest");
-export const TRANSLATE_MODEL = env("GEMINI_TRANSLATE_MODEL", "gemini-2.5-flash-lite");
+// Dedicated Live-API ASR model, not a dialog model: no system prompt; biasing
+// goes through languageCodes/customVocabulary. The old native-audio default
+// transcribed nothing (VAD on) or garbage (VAD off) on noisy audio.
+export const ASR_MODEL = env("GEMINI_ASR_MODEL", "gemini-3.5-transcribe-live");
+export const TRANSLATE_MODEL = env("GEMINI_TRANSLATE_MODEL", "gemini-3.1-flash-lite");
 
 export const ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY");
 export const DEEPSEEK_API_KEY = env("DEEPSEEK_API_KEY");
@@ -103,14 +106,13 @@ export interface TranslateBackend {
 // talk to, what model, and where to point. Users add their own via livesub.toml
 // (same schema).
 export const TRANSLATE_BACKENDS_BUILTIN: TranslateBackend[] = [
-  { id: "claude-haiku", label: "Claude Haiku", sdk: "anthropic", model: "claude-haiku-4-5", api_key_env: "ANTHROPIC_API_KEY" },
-  { id: "claude-sonnet", label: "Claude Sonnet", sdk: "anthropic", model: "claude-sonnet-4-6", api_key_env: "ANTHROPIC_API_KEY" },
-  { id: "claude-opus", label: "Claude Opus", sdk: "anthropic", model: "claude-opus-4-7", api_key_env: "ANTHROPIC_API_KEY" },
+  { id: "claude-haiku", label: "Claude Haiku", sdk: "anthropic", model: "claude-haiku-5-5", api_key_env: "ANTHROPIC_API_KEY" },
+  { id: "claude-sonnet", label: "Claude Sonnet", sdk: "anthropic", model: "claude-sonnet-5-5", api_key_env: "ANTHROPIC_API_KEY" },
   {
     id: "deepseek-flash",
     label: "DeepSeek Flash",
     sdk: "anthropic",
-    model: env("DEEPSEEK_TRANSLATE_MODEL", "deepseek-v4-flash"),
+    model: env("DEEPSEEK_TRANSLATE_MODEL", "deepseek-flash"),
     api_key_env: "DEEPSEEK_API_KEY",
     base_url: DEEPSEEK_BASE_URL,
   },
@@ -169,16 +171,18 @@ export function getTranslateBackend(backendId: string): TranslateBackend | null 
   return null;
 }
 
-// Disable extended thinking on every translation call. Claude variants default
-// to no-thinking already; DeepSeek-V4-flash defaults to thinking ON, which
-// inflates output tokens / latency. Passing explicitly keeps behaviour
-// consistent across backends.
-export const ANTHROPIC_THINKING_DISABLED = { type: "disabled" as const };
+// Turn extended thinking off on every translation call (it inflates output
+// tokens / latency). claude-sonnet-5-5 rejects {type: "disabled"} with a 400
+// and takes {type: "between_tools"} instead; everything else wants "disabled".
+export type AnthropicThinkingOff = { type: "disabled" } | { type: "between_tools" };
+export function anthropicThinkingOff(model: string): AnthropicThinkingOff {
+  return model.includes("claude-sonnet-5-5") ? { type: "between_tools" } : { type: "disabled" };
+}
 
 // /api/hints (scene-seed -> glossary research) supports two backends. Gemini is
 // preferred when GEMINI_API_KEY is set. Claude is the fallback.
 export const HINTS_BACKEND = env("HINTS_BACKEND", "auto").trim().toLowerCase();
-export const HINTS_CLAUDE_MODEL = "claude-sonnet-4-6";
+export const HINTS_CLAUDE_MODEL = env("HINTS_CLAUDE_MODEL", "claude-sonnet-5-5");
 export const HINTS_GEMINI_MODEL = env("HINTS_GEMINI_MODEL", "gemini-2.5-flash");
 
 export const DEFAULT_TARGET_LANG = "Chinese (Simplified)";
@@ -190,6 +194,12 @@ export const SENTENCE_IDLE_FLUSH_SEC = 5.0;
 // Intra-sentence partial translation pacing (anthropic-/openai-SDK backends).
 export const PARTIAL_HARD_FLOOR_SEC = 0.4;
 export const PARTIAL_MIN_NEW_BYTES = 24;
+
+// Gemini interim consumption: hold back the hypothesis tail (in-place rewrites
+// cluster in the last ~15 chars; forwarding them eagerly duplicates text) and
+// flush the held tail once the hypothesis has been idle this long.
+export const GEMINI_INTERIM_HOLDBACK_CHARS = 20;
+export const GEMINI_INTERIM_FLUSH_SEC = 1.5;
 
 // Audio gate: skip chunks whose absolute peak is below this (synthetic silence).
 export const AUDIO_GATE_PEAK = 200;

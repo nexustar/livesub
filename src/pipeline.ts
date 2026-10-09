@@ -9,8 +9,9 @@
 // preserved verbatim: the leading-space lstrip in onTranscriptChunk, `cut <= 0`
 // in the length fallback, the qwen `--skip-silence` / `--past-text yes` flags
 // (and no --repeat-penalty), the silent->speech pre-buffer replay, the Gemini
-// per-turn_complete session reset, the 6-char hold-back in PairedStreamParser
-// (in prompts.ts), and the atomic-swap `ok` flag on translation_done.
+// transcribe-live VAD-off + positional interim consumption, the 6-char
+// hold-back in PairedStreamParser (in prompts.ts), and the atomic-swap `ok`
+// flag on translation_done.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
@@ -20,17 +21,18 @@ import type { Writable } from "node:stream";
 import { WebSocket } from "ws";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import { GoogleGenAI, Modality, type LiveServerMessage, type Session } from "@google/genai";
+import { GoogleGenAI, Modality, ThinkingLevel, type LiveServerMessage, type Session } from "@google/genai";
 
 import {
   AUDIO_GATE_PEAK,
   AUDIO_PREBUFFER_CHUNKS,
   ASR_MODEL,
-  ANTHROPIC_THINKING_DISABLED,
   DASHSCOPE_API_KEY,
   DASHSCOPE_BASE_URL,
   DASHSCOPE_REALTIME_MODEL,
   DASHSCOPE_VAD_THRESHOLD,
+  GEMINI_INTERIM_FLUSH_SEC,
+  GEMINI_INTERIM_HOLDBACK_CHARS,
   HISTORY_PAIRS,
   OPENAI_API_KEY,
   OPENAI_REALTIME_MODEL,
@@ -45,6 +47,7 @@ import {
   VOXTRAL_BIN,
   VOXTRAL_INTERVAL_SEC,
   VOXTRAL_MODEL_DIR,
+  anthropicThinkingOff,
   getTranslateBackend,
   qwenModelDirFor,
   resolveBin,
@@ -53,7 +56,6 @@ import {
 } from "./config.js";
 import {
   PairedStreamParser,
-  buildAsrPrompt,
   buildQwenPrompt,
   buildPairedTranslationSystemInstruction,
   buildTranslationPrompt,
@@ -64,6 +66,9 @@ import {
 import { AbortError, AsyncQueue, chunkPeak, log, monotonic, sleep } from "./util.js";
 
 // ---------- small process/stream helpers ----------
+
+// Sentinel for the Gemini recv loop's flush-tick race (see runOneAsrSession).
+const RECV_TICK = Symbol("recv-tick");
 
 function isFile(p: string): boolean {
   try {
@@ -203,7 +208,6 @@ export class Pipeline {
   private sentenceBuffer = "";
   private lastChunkTime = 0;
   private nextSid = 0;
-  private resumptionHandle: string | null = null;
   private stopRequested = false;
   private statsChunks = 0;
   private statsBytes = 0;
@@ -288,7 +292,8 @@ export class Pipeline {
       } else if (this.asrBackend === "qwen-cloud") {
         await this.dashscopeAsrWorker();
       } else {
-        // Gemini Live: reopen after every turn_complete / go_away (see landmine).
+        // Gemini transcribe-live: sessions cap at ~10 min; reopen on go_away,
+        // unexpected turn_complete, or error until the client hangs up.
         while (!this.stopRequested) {
           try {
             await this.runOneAsrSession();
@@ -810,11 +815,30 @@ export class Pipeline {
     return raceErr;
   }
 
-  // ----- Gemini Live backend (native-audio input transcription) -----
+  // ----- Gemini Live backend (gemini-3.5-transcribe-live) -----
+
+  // Glossary -> customVocabulary terms for ASR token biasing. Glossary only —
+  // scene stays out of the ASR path (same rule as qwen's --prompt).
+  private buildGeminiVocabulary(): string[] {
+    return this.glossary
+      .split(/[,、;;\n]/u)
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .slice(0, 64);
+  }
 
   private async runOneAsrSession(): Promise<void> {
     if (!this.gemini) throw new Error("gemini client not configured");
     const msgQueue = new AsyncQueue<LiveServerMessage | null>();
+    // Transcribe-live setup: automatic VAD DISABLED, one manual activity held
+    // open all session — the server VAD detected 0.9s of a 50s announcement on
+    // noisy audio; do not re-enable. No systemInstruction (pure ASR model) and
+    // no sessionResumption (no conversational context; goAway reopens fresh).
+    const transcriptionCfg: Record<string, unknown> = {};
+    const src = this.sourceLang.trim().toLowerCase();
+    if (src && src !== "auto") transcriptionCfg.languageCodes = [SOURCE_LANG_ISO[src] ?? src];
+    const vocab = this.buildGeminiVocabulary();
+    if (vocab.length) transcriptionCfg.customVocabulary = vocab;
     const session: Session = await this.gemini.live.connect({
       model: ASR_MODEL,
       callbacks: {
@@ -827,17 +851,14 @@ export class Pipeline {
         onclose: () => msgQueue.put(null),
       },
       config: {
-        // Native-audio Live models require AUDIO modality; we tell the model to
-        // stay silent via the system prompt and ignore any audio it emits.
-        responseModalities: [Modality.AUDIO],
-        systemInstruction: buildAsrPrompt(this.sourceLang, this.scene, this.glossary),
-        inputAudioTranscription: {},
-        contextWindowCompression: { slidingWindow: {} },
-        sessionResumption: { handle: this.resumptionHandle ?? undefined },
+        responseModalities: [Modality.TEXT],
+        inputAudioTranscription: transcriptionCfg,
+        realtimeInputConfig: { automaticActivityDetection: { disabled: true } },
       },
     });
-    log.info(`ASR session opened (handle=${this.resumptionHandle ? "resume" : "new"})`);
+    log.info(`ASR session opened (transcribe-live, langs=${JSON.stringify(transcriptionCfg.languageCodes ?? "auto")} vocab=${vocab.length})`);
     await this.safeSendJson({ type: "asr_session", state: "open" });
+    session.sendRealtimeInput({ activityStart: {} });
 
     const ac = new AbortController();
     const meter = new AudioMeter();
@@ -865,28 +886,88 @@ export class Pipeline {
       }
     };
 
+    // interimInputTranscription is a growing FULL hypothesis (replace
+    // semantics), NOT an append stream. Consume it positionally, holding back
+    // the tail: the model rewrites its last ~15 chars in place, and forwarding
+    // them eagerly duplicates/drops words. Captions can't retract — rewrites
+    // deeper than the hold-back degrade to a few wrong chars.
+    let interimConsumed = 0;
+    let lastInterim = "";
+    let lastInterimAt = 0;
+    let guardText = ""; // pre-final hypothesis, for continuation detection
+
+    // Forward the held-back tail (idle hypothesis / session ending).
+    const flushTail = async (): Promise<void> => {
+      if (interimConsumed < lastInterim.length) {
+        const delta = lastInterim.slice(interimConsumed);
+        interimConsumed = lastInterim.length;
+        await this.onTranscriptText(delta);
+      }
+    };
+
     const recv = async (): Promise<void> => {
+      // Keep one queue read pending across timeout ticks — re-issuing get()
+      // after a lost race would drop a message.
+      let pending = msgQueue.get();
       for (;;) {
-        const resp = await msgQueue.get();
-        if (resp === null) return;
-        const sru = resp.sessionResumptionUpdate;
-        if (sru) {
-          if (sru.resumable && sru.newHandle) this.resumptionHandle = sru.newHandle;
+        const winner = await Promise.race([pending, sleep(0.5).then(() => RECV_TICK)]);
+        if (winner === RECV_TICK) {
+          if (lastInterimAt && monotonic() - lastInterimAt >= GEMINI_INTERIM_FLUSH_SEC) await flushTail();
+          continue;
         }
+        const resp = winner as LiveServerMessage | null;
+        if (resp === null) {
+          // Abrupt error/close: flush the held tail — the next session's fresh
+          // hypothesis won't restate it.
+          await flushTail();
+          return;
+        }
+        pending = msgQueue.get();
         const goAway = resp.goAway;
         if (goAway) {
-          log.info(`go_away time_left=${goAway.timeLeft}; will resume`);
+          log.info(`go_away time_left=${goAway.timeLeft}; will reopen`);
           await this.safeSendJson({ type: "asr_session", state: "go_away" });
+          await flushTail();
           return;
         }
         const sc = resp.serverContent;
         if (!sc) continue;
-        const it = sc.inputTranscription;
-        if (it && it.text) await this.onTranscriptText(it.text);
+        // A final can fire on pauses even with VAD off. Ignore its text
+        // (restates the interims, different spacing), but the next interim
+        // usually restarts from scratch: flush the old tail, reset tracking.
+        // guardText covers the sessions where the interim does NOT restart.
+        const fin = sc.inputTranscription?.text;
+        if (fin) {
+          log.info(`ASR final segment (${fin.length} chars); expecting interim restart`);
+          await flushTail();
+          guardText = lastInterim;
+          interimConsumed = 0;
+          lastInterim = "";
+          lastInterimAt = 0;
+        }
+        const interim = sc.interimInputTranscription?.text;
+        if (interim) {
+          if (guardText) {
+            let lcp = 0;
+            const n = Math.min(interim.length, guardText.length);
+            while (lcp < n && interim.charCodeAt(lcp) === guardText.charCodeAt(lcp)) lcp += 1;
+            // >=80% prefix overlap -> never restarted; restore the old offset.
+            if (lcp >= guardText.length * 0.8) interimConsumed = guardText.length;
+            guardText = "";
+          }
+          lastInterim = interim;
+          lastInterimAt = monotonic();
+          const target = interim.length - GEMINI_INTERIM_HOLDBACK_CHARS;
+          if (target > interimConsumed) {
+            const delta = interim.slice(interimConsumed, target);
+            interimConsumed = target;
+            await this.onTranscriptText(delta);
+          }
+        }
         if (sc.turnComplete) {
-          await this.finalizePendingSentence();
-          log.info("ASR turn_complete (resetting session)");
+          log.info("ASR turn_complete (reopening session)");
           await this.safeSendJson({ type: "asr_session", state: "reset" });
+          await flushTail();
           return;
         }
       }
@@ -1242,7 +1323,9 @@ export class Pipeline {
     if (!this.gemini) throw new Error("gemini client not configured");
     const prompt = buildTranslationPrompt(text, history, isPartial);
     const sys = buildTranslationSystemInstruction(this.targetLang, this.sourceLang, this.scene);
-    const config = { systemInstruction: sys, thinkingConfig: { thinkingBudget: 0 }, temperature: 0.2 };
+    // thinkingLevel, not thinkingBudget: gemini-3.5-flash-lite 400s on
+    // thinkingBudget: 0.
+    const config = { systemInstruction: sys, thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL }, temperature: 0.2 };
 
     let attempts = 0;
     const maxAttempts = 2;
@@ -1305,15 +1388,13 @@ export class Pipeline {
       attempts += 1;
       const full: string[] = [];
       try {
-        // cache_control is a top-level auto-cache param (matches server.py). It
-        // isn't in this SDK version's param type, so widen with an intersection
-        // so it still serializes onto the wire.
-        const params: Anthropic.MessageStreamParams & { cache_control: Anthropic.CacheControlEphemeral } = {
+        // cache_control is a top-level auto-cache param (matches server.py).
+        const params: Anthropic.MessageStreamParams = {
           model,
           max_tokens: 512,
           system: sys,
           messages,
-          thinking: ANTHROPIC_THINKING_DISABLED,
+          thinking: anthropicThinkingOff(model),
           cache_control: { type: "ephemeral" },
         };
         const stream = this.claude.messages.stream(params, signal ? { signal } : undefined);
@@ -1433,12 +1514,12 @@ export class Pipeline {
       attempts += 1;
       parser = new PairedStreamParser();
       try {
-        const params: Anthropic.MessageStreamParams & { cache_control: Anthropic.CacheControlEphemeral } = {
+        const params: Anthropic.MessageStreamParams = {
           model,
           max_tokens: 512,
           system: sys,
           messages,
-          thinking: ANTHROPIC_THINKING_DISABLED,
+          thinking: anthropicThinkingOff(model),
           cache_control: { type: "ephemeral" },
         };
         const stream = this.claude.messages.stream(params);
