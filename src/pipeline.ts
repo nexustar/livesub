@@ -436,7 +436,7 @@ export class Pipeline {
           this.statsBytes += chunk.length;
           const peak = chunkPeak(chunk);
           const gated = peak < AUDIO_GATE_PEAK;
-          prebuffer.push(chunk); // always — used at next onset
+          prebuffer.push(chunk); // unsent chunks only — replayed at next onset
           if (prebuffer.length > AUDIO_PREBUFFER_CHUNKS) prebuffer.shift();
           if (!gated) this.chunksFedToAsr += 1;
           const stats = meter.add(peak);
@@ -473,6 +473,10 @@ export class Pipeline {
               return;
             }
           }
+          // Everything buffered has now been sent. Without this, a gate that
+          // reopens within AUDIO_PREBUFFER_CHUNKS replays audio the ASR already
+          // heard and the words come out twice.
+          prebuffer.length = 0;
           prevGated = false;
         }
       } finally {
