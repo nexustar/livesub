@@ -206,6 +206,9 @@ export class Pipeline {
   private readonly sentenceQueue = new AsyncQueue<[number, string, number] | null>();
   private history: Array<[string, string]> = [];
   private sentenceBuffer = "";
+  // Last live line sent for onTranscriptUpdate, to skip no-op and empty-new-line sends.
+  private liveSid = -1;
+  private liveText = "";
   private lastChunkTime = 0;
   private nextSid = 0;
   private stopRequested = false;
@@ -358,6 +361,8 @@ export class Pipeline {
     const qwenPrompt = buildQwenPrompt(this.glossary);
     if (qwenPrompt) qwenCmd.push("--prompt", qwenPrompt);
     if (chunkSec) qwenCmd.push("--stream-chunk-sec", chunkSec);
+    // Committed text and the provisional tail, one JSON object per line.
+    qwenCmd.push("--stream-json");
 
     // qwen-asr block-buffers stdout when piped; wrap with stdbuf for line
     // buffering. Falls back to raw command if stdbuf missing.
@@ -365,7 +370,7 @@ export class Pipeline {
     log.info(`starting qwen-asr: ${cmd.join(" ")}`);
     await this.safeSendJson({ type: "asr_session", state: "open" });
 
-    await this.runSubprocessAsr(cmd, "qwen");
+    await this.runSubprocessAsr(cmd, "qwen", true);
     return;
   }
 
@@ -404,16 +409,31 @@ export class Pipeline {
   // Shared feed/receive loop for the local subprocess backends (qwen + voxtral):
   // audio gate, silent->speech pre-buffer replay, 500ms windowed peak for the UI
   // meter, and UTF-8 incremental decode of stdout tokens are identical.
-  private async runSubprocessAsr(cmd: string[], label: string): Promise<void> {
+  private async runSubprocessAsr(cmd: string[], label: string, jsonUpdates = false): Promise<void> {
     let proc: ChildProcess;
     try {
-      proc = spawn(cmd[0], cmd.slice(1), { stdio: ["pipe", "pipe", "ignore"] });
+      proc = spawn(cmd[0], cmd.slice(1), { stdio: ["pipe", "pipe", jsonUpdates ? "pipe" : "ignore"] });
     } catch (e) {
       await this.safeSendJson({ type: "error", message: `failed to spawn ${label}: ${e instanceof Error ? e.message : String(e)}` });
       return;
     }
     const stdin = proc.stdin as Writable;
     stdin.on("error", () => {}); // swallow EPIPE; feed checks writability
+
+    // With --stream-json, qwen-asr logs its resets, loop recoveries,
+    // language changes and decode backlog to stderr, one line each.
+    if (proc.stderr) {
+      const errDecoder = new StringDecoder("utf8");
+      let errPending = "";
+      proc.stderr.on("data", (buf: Buffer) => {
+        errPending += errDecoder.write(buf);
+        for (let nl = errPending.indexOf("\n"); nl >= 0; nl = errPending.indexOf("\n")) {
+          const line = errPending.slice(0, nl).trim();
+          errPending = errPending.slice(nl + 1);
+          if (line) log.info(`${label}: ${line}`);
+        }
+      });
+    }
 
     if (this.asrStartedAt === 0) this.asrStartedAt = monotonic();
 
@@ -515,10 +535,34 @@ export class Pipeline {
     });
 
     const receive = async (): Promise<void> => {
+      let pending = "";
       for (;;) {
         const text = await outQueue.get();
         if (text === null) return;
-        await this.onTranscriptText(text);
+        if (!jsonUpdates) {
+          await this.onTranscriptText(text);
+          continue;
+        }
+        // --stream-json: one {"commit","tail"} object per line.
+        pending += text;
+        for (let nl = pending.indexOf("\n"); nl >= 0; nl = pending.indexOf("\n")) {
+          const line = pending.slice(0, nl).trim();
+          pending = pending.slice(nl + 1);
+          if (!line) continue;
+          let upd: { commit?: unknown; tail?: unknown };
+          try {
+            upd = JSON.parse(line);
+          } catch {
+            log.warning(`${label}: non-JSON line: ${line.slice(0, 120)}`);
+            continue;
+          }
+          // Skip objects that are not updates, so new kinds of lines can be added.
+          if (!upd || typeof upd !== "object" || (!("commit" in upd) && !("tail" in upd))) continue;
+          await this.onTranscriptUpdate(
+            typeof upd.commit === "string" ? upd.commit : "",
+            typeof upd.tail === "string" ? upd.tail : "",
+          );
+        }
       }
     };
 
@@ -1030,14 +1074,52 @@ export class Pipeline {
       this.sentenceBuffer = this.sentenceBuffer.replace(/^\s+/u, "");
     }
     this.lastChunkTime = now;
+    // No boundary yet: live partial translation (anthropic/openai backends).
+    if (!(await this.cutSentence(false))) await this.maybeTriggerPartial();
+  }
+
+  // Committed text plus a provisional tail (qwen --stream-json). Sentence
+  // boundaries are taken from committed text only: the tail routinely ends in
+  // a period that the next chunk takes back. The client shows both, replaced
+  // wholesale on every update.
+  private async onTranscriptUpdate(commit: string, tail: string): Promise<void> {
+    const now = monotonic();
+    if ((commit || tail) && this.currentSegFirstChunk === 0) this.currentSegFirstChunk = now;
+    let cut = false;
+    if (commit) {
+      this.sentenceBuffer += commit;
+      // Same leading-space strip as onTranscriptChunk (see the note there).
+      if (/^\s/u.test(this.sentenceBuffer)) this.sentenceBuffer = this.sentenceBuffer.replace(/^\s+/u, "");
+      this.lastChunkTime = now;
+      cut = await this.cutSentence(true);
+    }
+    const live = (this.sentenceBuffer + tail).replace(/^\s+/u, "");
+    const sid = this.nextSid;
+    if (sid === this.liveSid ? live !== this.liveText : live !== "") {
+      await this.safeSendJson({ type: "transcript_replace", sid, text: live });
+      this.liveSid = sid;
+      this.liveText = live;
+    }
+    if (commit && !cut) await this.maybeTriggerPartial();
+  }
+
+  // Dispatch a sentence from sentenceBuffer if a boundary is present. Returns
+  // true when the caller should not go on to partial translation. syncClient
+  // first overwrites the client's line with exactly the dispatched text, for
+  // callers whose client line also holds text that is not part of it.
+  private async cutSentence(syncClient: boolean): Promise<boolean> {
+    const dispatch = async (sentence: string): Promise<void> => {
+      if (syncClient) await this.safeSendJson({ type: "transcript_replace", sid: this.nextSid, text: sentence });
+      await this.dispatchSentence(sentence);
+    };
     // 1) hard-punctuation cut — preferred boundary.
     let idx = findLastPunct(this.sentenceBuffer, false);
     if (idx >= 0) {
       const sentence = this.sentenceBuffer.slice(0, idx + 1).trim();
       if (sentence) {
         this.sentenceBuffer = this.sentenceBuffer.slice(idx + 1);
-        await this.dispatchSentence(sentence);
-        return;
+        await dispatch(sentence);
+        return true;
       }
     }
     // 2) soft-punctuation cut once the buffer is long enough.
@@ -1047,8 +1129,8 @@ export class Pipeline {
         const sentence = this.sentenceBuffer.slice(0, idx + 1).trim();
         if (sentence) {
           this.sentenceBuffer = this.sentenceBuffer.slice(idx + 1);
-          await this.dispatchSentence(sentence);
-          return;
+          await dispatch(sentence);
+          return true;
         }
       }
     }
@@ -1060,11 +1142,10 @@ export class Pipeline {
       if (cut <= 0) cut = SENTENCE_MAX_CHARS;
       const sentence = this.sentenceBuffer.slice(0, cut).trim();
       this.sentenceBuffer = this.sentenceBuffer.slice(cut);
-      if (sentence) await this.dispatchSentence(sentence);
-      return;
+      if (sentence) await dispatch(sentence);
+      return true;
     }
-    // 4) live partial translation (anthropic/openai backends).
-    await this.maybeTriggerPartial();
+    return false;
   }
 
   private nextRev(): number {

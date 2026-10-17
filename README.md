@@ -38,7 +38,7 @@ cheapest practical translation (DeepSeek).
 Install qwen-asr:
 
 ```bash
-git clone -b livesub https://github.com/nexustar/qwen-asr
+git clone https://github.com/nexustar/qwen-asr
 cd qwen-asr && make blas && ./download_model.sh --model small
 ```
 
