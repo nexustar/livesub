@@ -767,6 +767,9 @@ export class Pipeline {
         };
 
         const recv = async (): Promise<void> => {
+          // The turn's confirmed text already moved into sentenceBuffer.
+          // Events carry the whole turn so far; only what follows this is new.
+          let turnFed = "";
           for (;;) {
             const raw = await msgQueue.get();
             if (raw === null) return;
@@ -779,27 +782,36 @@ export class Pipeline {
             }
             const t = (evt.type as string) ?? "";
             if (t === "conversation.item.input_audio_transcription.text") {
-              // `text` = confirmed cumulative prefix, `stash` = provisional tail.
-              // Display text+stash (Alibaba's own sample behaviour); mirror it
-              // into sentenceBuffer and run partial translation for long turns.
+              // `text` = confirmed cumulative prefix of the turn, `stash` =
+              // provisional tail. Sentences are cut from the confirmed text as
+              // it grows, so a long turn without a VAD pause is not one line;
+              // the client shows the uncut rest plus the stash.
               const textConfirmed = (evt.text as string) ?? "";
               const stashPending = (evt.stash as string) ?? "";
-              const liveText = textConfirmed + stashPending;
-              if (liveText) {
-                if (this.currentSegFirstChunk === 0) this.currentSegFirstChunk = monotonic();
-                await this.safeSendJson({ type: "transcript_replace", sid: this.nextSid, text: liveText });
-                this.sentenceBuffer = liveText;
-                await this.maybeTriggerPartial();
+              if (!textConfirmed && !stashPending) continue;
+              if (this.currentSegFirstChunk === 0) this.currentSegFirstChunk = monotonic();
+              if (textConfirmed.length > turnFed.length && textConfirmed.startsWith(turnFed)) {
+                this.sentenceBuffer += textConfirmed.slice(turnFed.length);
+                turnFed = textConfirmed;
+                if (/^\s/u.test(this.sentenceBuffer)) this.sentenceBuffer = this.sentenceBuffer.replace(/^\s+/u, "");
+                await this.cutSentence(true);
               }
+              const live = (this.sentenceBuffer + stashPending).replace(/^\s+/u, "");
+              await this.safeSendJson({ type: "transcript_replace", sid: this.nextSid, text: live });
+              await this.maybeTriggerPartial();
             } else if (t === "conversation.item.input_audio_transcription.completed") {
-              // VAD boundary + canonical transcript; dispatch directly.
-              const final = ((evt.transcript as string) ?? "").trim();
+              // VAD boundary + canonical transcript of the turn: dispatch what
+              // has not been cut yet.
+              const final = (evt.transcript as string) ?? "";
+              const rest = final.startsWith(turnFed) ? final.slice(turnFed.length) : final.slice(Math.min(turnFed.length, final.length));
+              const sentence = (this.sentenceBuffer + rest).trim();
               this.sentenceBuffer = "";
               this.lastChunkTime = 0;
-              if (final) {
+              turnFed = "";
+              if (sentence) {
                 // Sync the client's visible src to the canonical final first.
-                await this.safeSendJson({ type: "transcript_replace", sid: this.nextSid, text: final });
-                await this.dispatchSentence(final);
+                await this.safeSendJson({ type: "transcript_replace", sid: this.nextSid, text: sentence });
+                await this.dispatchSentence(sentence);
               }
             } else if (t === "session.finished") {
               return;
