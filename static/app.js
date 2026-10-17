@@ -332,6 +332,7 @@ function getOrCreate(sid) {
     s = {
       sid, src: "", dst: "",
       srcDone: false, dstDone: false, archived: false,
+      promoted: false,  // moved to PREV (in sid order, see promoteReady)
       currentRev: 0,    // latest revision known for this sentence's translation
       // Two-phase revision rendering: streaming chunks for the FIRST
       // revision go straight into `dst` so the user gets feedback as
@@ -353,12 +354,14 @@ function render() {
   // prev zone broken out, current is the lowest sid that is unarchived
   // AND not currently in the prev slot (so we don't render the same
   // sentence in two zones). Falls back to the newest unarchived.
+  // Translations finish out of order, so a sentence can be done yet still
+  // wait here for an earlier one; anything not yet promoted counts as live.
   let current = null;
   let newestUnarchived = null;
   for (const [, s] of sentences) {
     if (s.archived) continue;
     if (s.sid === prevSlotSid) continue;
-    if (!s.srcDone || !s.dstDone) {
+    if (!s.promoted) {
       if (current === null || s.sid < current.sid) current = s;
     }
     if (newestUnarchived === null || s.sid > newestUnarchived.sid) newestUnarchived = s;
@@ -373,7 +376,7 @@ function render() {
   if (display) {
     for (const [, s] of sentences) {
       if (s.archived || s.sid === prevSlotSid || s.sid <= display.sid) continue;
-      if (!s.srcDone || !s.dstDone) {
+      if (!s.promoted) {
         const next = s.src.trim();
         // Space between sentences, except around CJK / full-width text.
         const cjk = /[　-鿿＀-￯]/;
@@ -409,6 +412,21 @@ function promoteToPrev(s) {
   prevCardEl.classList.remove("entering");
   void prevCardEl.offsetWidth;
   prevCardEl.classList.add("entering");
+}
+
+// Promote the oldest unpromoted sentences while they are finished. A later
+// sentence whose translation finished first waits for the earlier ones.
+function promoteReady() {
+  for (;;) {
+    let next = null;
+    for (const [, s] of sentences) {
+      if (s.archived || s.promoted) continue;
+      if (next === null || s.sid < next.sid) next = s;
+    }
+    if (!next || !next.srcDone || !next.dstDone) return;
+    next.promoted = true;
+    promoteToPrev(next);
+  }
 }
 
 function appendToHistory(s) {
@@ -693,9 +711,9 @@ async function start() {
             translationsDone++;
             translationsPending = Math.max(0, translationsPending - 1);
             updateBadges();
-            // Promote: this sentence becomes the new PREV (with slide-in
-            // animation), the old PREV gets pushed to history.
-            promoteToPrev(s);
+            // Promote finished sentences to PREV in sid order (with slide-in
+            // animation); the old PREV gets pushed to history.
+            promoteReady();
             render();
           }
           break;

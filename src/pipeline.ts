@@ -210,6 +210,13 @@ export class Pipeline {
   private liveText = "";
   private lastChunkTime = 0;
   private nextSid = 0;
+  // Final translations run concurrently. Their results enter history (the
+  // context of later translations) in sentence order: finished results wait
+  // in historyPending until every earlier sid has finished.
+  private finalsInFlight = 0;
+  private historyNextSid = 0;
+  private readonly historyPending = new Map<number, [string, string] | null>();
+  private readonly dispatchedAt = new Map<number, number>();
   private stopRequested = false;
   private statsChunks = 0;
   private statsBytes = 0;
@@ -1242,48 +1249,92 @@ export class Pipeline {
     const rev = this.nextRev();
     await this.safeSendJson({ type: "transcript_done", sid });
     await this.safeSendJson({ type: "translation_start", sid });
+    this.dispatchedAt.set(sid, now);
     this.sentenceQueue.put([sid, sentence, rev]);
   }
 
   // ----- translator worker -----
 
   private async translatorWorker(): Promise<void> {
+    const running = new Set<Promise<void>>();
     try {
       for (;;) {
         const item = await this.sentenceQueue.get();
         if (item === null) return;
         const [sid, sentence, rev] = item;
-        try {
-          await this.translateFinal(sid, rev, sentence);
-        } catch (e) {
-          log.exception(`final translation failed for sid=${sid}`, e);
-        }
+        // Not queued behind the previous sentence: every final starts at once.
+        const p = this.runFinal(sid, rev, sentence).finally(() => running.delete(p));
+        running.add(p);
       }
     } finally {
+      await Promise.allSettled([...running]);
       log.info("translator worker exiting");
     }
   }
 
-  private async translateFinal(sid: number, rev: number, sentence: string): Promise<void> {
+  private async runFinal(sid: number, rev: number, sentence: string): Promise<void> {
+    const dispatched = this.dispatchedAt.get(sid);
+    const startAt = monotonic();
+    this.finalsInFlight += 1;
+    const concurrent = this.finalsInFlight;
+    log.debug(
+      `TR start sid=${sid} chars=${sentence.length} in_flight=${concurrent} ` +
+        `wait=${dispatched !== undefined ? Math.trunc((startAt - dispatched) * 1000) : "—"}ms`,
+    );
+    let translated = "";
+    try {
+      translated = await this.translateFinal(sid, rev, sentence, concurrent > 1);
+    } catch (e) {
+      log.exception(`final translation failed for sid=${sid}`, e);
+    } finally {
+      this.finalsInFlight -= 1;
+      const doneAt = monotonic();
+      log.debug(
+        `TR end sid=${sid} took=${Math.trunc((doneAt - startAt) * 1000)}ms ` +
+          `since_dispatch=${dispatched !== undefined ? Math.trunc((doneAt - dispatched) * 1000) : "—"}ms in_flight=${this.finalsInFlight}`,
+      );
+      this.dispatchedAt.delete(sid);
+      this.commitHistory(sid, translated ? [sentence, translated] : null);
+    }
+  }
+
+  // Add a finished final to history in sentence order (see historyPending).
+  private commitHistory(sid: number, pair: [string, string] | null): void {
+    this.historyPending.set(sid, pair);
+    while (this.historyPending.has(this.historyNextSid)) {
+      const cur = this.historyPending.get(this.historyNextSid) ?? null;
+      this.historyPending.delete(this.historyNextSid);
+      if (cur) {
+        this.history.push(cur);
+        this.history = this.history.slice(-HISTORY_PAIRS);
+        this.pairedPrevSid = this.historyNextSid;
+        this.pairedPrevSrc = cur[0];
+        this.pairedPrevDst = cur[1];
+      }
+      this.historyNextSid += 1;
+    }
+    if (this.historyPending.size > 0) {
+      log.debug(`TR history waits for sid=${this.historyNextSid} (${this.historyPending.size} later done)`);
+    }
+  }
+
+  private async translateFinal(sid: number, rev: number, sentence: string, concurrent: boolean): Promise<string> {
     // Passthrough: mirror the source as translation so the rest of the pipeline
     // (revision / translation / done events, promoteToPrev, history) is unchanged.
     if (this.translateBackend === "none") {
       await this.safeSendJson({ type: "translation_revision", sid, rev });
       await this.safeSendJson({ type: "translation", sid, rev, text: sentence });
       await this.safeSendJson({ type: "translation_done", sid, rev, final: true, ok: true });
-      this.history.push([sentence, sentence]);
-      this.history = this.history.slice(-HISTORY_PAIRS);
-      this.pairedPrevSid = sid;
-      this.pairedPrevSrc = sentence;
-      this.pairedPrevDst = sentence;
       log.info(`TR none-passthrough sid=${sid} rev=${rev} chars=${sentence.length}`);
-      return;
+      return sentence;
     }
 
-    // Paired translation — anthropic-SDK backends only, and only after at least
-    // one prior turn.
+    // Paired translation — anthropic-SDK backends only, after at least one
+    // prior turn, and not while another final is running: the sentence just
+    // before this one may not be translated yet, so the pair would be stale.
     const backendCfg = getTranslateBackend(this.translateBackend);
-    const usePaired = backendCfg?.sdk === "anthropic" && this.pairedPrevSid !== null && Boolean(this.pairedPrevDst);
+    const usePaired =
+      backendCfg?.sdk === "anthropic" && !concurrent && this.pairedPrevSid !== null && Boolean(this.pairedPrevDst);
 
     let translated = "";
     if (usePaired) {
@@ -1305,13 +1356,7 @@ export class Pipeline {
     } else {
       translated = await this.translateStreaming(sid, rev, sentence, [...this.history], false, true);
     }
-    if (translated) {
-      this.history.push([sentence, translated]);
-      this.history = this.history.slice(-HISTORY_PAIRS);
-      this.pairedPrevSid = sid;
-      this.pairedPrevSrc = sentence;
-      this.pairedPrevDst = translated;
-    }
+    return translated;
   }
 
   private async translatePairedStreaming(

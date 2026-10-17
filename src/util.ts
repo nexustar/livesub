@@ -72,6 +72,11 @@ function stamp(): string {
 }
 
 export const log = {
+  // LOG_LEVEL=debug adds per-request detail (translation timing and
+  // concurrency). Read on each call: .env is loaded after this module.
+  debug(msg: string): void {
+    if ((process.env.LOG_LEVEL ?? "").toLowerCase() === "debug") console.log(`${stamp()} DEBUG ${msg}`);
+  },
   info(msg: string): void {
     console.log(`${stamp()} INFO ${msg}`);
   },
