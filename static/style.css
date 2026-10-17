@@ -337,6 +337,14 @@ body.settings-open #history { display: none; }
   min-height: 1.4em;
 }
 
+.latest {
+  margin: 8px 0 0;
+  padding-top: 6px;
+  border-top: 1px dashed #1f2937;
+  opacity: 0.85;
+}
+.latest[hidden] { display: none; }
+
 .translation {
   font-size: 28px;
   color: #e8e8e8;

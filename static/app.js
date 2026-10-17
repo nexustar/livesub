@@ -3,6 +3,7 @@ const clearBtn = document.getElementById("clear");
 const statusEl = document.getElementById("status");
 const transcriptEl = document.getElementById("transcript");
 const translationEl = document.getElementById("translation");
+const latestEl = document.getElementById("latest");
 const prevCardEl = document.getElementById("caption-prev");
 const prevTranscriptEl = document.getElementById("prev-transcript");
 const prevTranslationEl = document.getElementById("prev-translation");
@@ -365,6 +366,25 @@ function render() {
   const display = current || newestUnarchived;
   transcriptEl.textContent = display ? display.src : "";
   translationEl.textContent = display ? display.dst : "";
+  // Sentences after the one shown are still waiting for their translation
+  // (or still being spoken); show their source so it is not held back
+  // behind the translation in progress.
+  let latest = "";
+  if (display) {
+    for (const [, s] of sentences) {
+      if (s.archived || s.sid === prevSlotSid || s.sid <= display.sid) continue;
+      if (!s.srcDone || !s.dstDone) {
+        const next = s.src.trim();
+        // Space between sentences, except around CJK / full-width text.
+        const cjk = /[　-鿿＀-￯]/;
+        const sep = !latest || !next || cjk.test(latest.slice(-1)) || cjk.test(next[0]) ? "" : " ";
+        latest += sep + next;
+      }
+    }
+  }
+  latest = latest.trim();
+  latestEl.textContent = latest;
+  latestEl.hidden = latest === "";
 }
 
 // Promote a finalized sentence into the PREV zone. The sentence currently
@@ -786,6 +806,8 @@ async function stop() {
   }
   transcriptEl.textContent = "";
   translationEl.textContent = "";
+  latestEl.textContent = "";
+  latestEl.hidden = true;
   setToggleState(false);
   lockSettings(false);
   setStatus("idle");
@@ -806,6 +828,8 @@ clearBtn.addEventListener("click", () => {
   sentences.clear();
   transcriptEl.textContent = "";
   translationEl.textContent = "";
+  latestEl.textContent = "";
+  latestEl.hidden = true;
   prevTranscriptEl.textContent = "";
   prevTranslationEl.textContent = "";
   prevCardEl.hidden = true;
