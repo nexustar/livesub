@@ -103,14 +103,14 @@ export function buildPairedTranslationSystemInstruction(targetLang: string, sour
   let head =
     `Real-time ${targetLang} interpreter. Each turn, also reconsider ` +
     "the previous translation given the new sentence.\n\n" +
-    "Default KEEP — [PREV] must be byte-identical to the input. REVISE " +
+    "Default KEEP — <prev> must be byte-identical to the input. REVISE " +
     "only when the new sentence reveals: a wrong word sense, a " +
     "mid-clause/number cut completed by new, or actual ambiguity. " +
     "Stylistic tweaks are NOT a reason — they cause UI flicker.\n\n" +
-    "[CURR] must NEVER be empty. Even if the new sentence is " +
+    "<curr> must NEVER be empty. Even if the new sentence is " +
     "fragmentary, garbled, a song-lyric piece, or unclear, output a " +
-    "best-effort translation in [CURR]. The UI shows [CURR] as the " +
-    "live caption for this turn — empty [CURR] = blank caption = bug.";
+    "best-effort translation in <curr>. The UI shows <curr> as the " +
+    "live caption for this turn — empty <curr> = blank caption = bug.";
   const src = (sourceLang || "").trim();
   if (src && src.toLowerCase() !== "auto") head += `\n\nSource language: ${src}.`;
   if (scene) head += `\n\nScene: ${scene}`;
@@ -118,31 +118,31 @@ export function buildPairedTranslationSystemInstruction(targetLang: string, sour
   return (
     head +
     "\n\nOutput ONLY the three blocks:\n" +
-    "[D]keep[/D] or [D]revise[/D]\n" +
-    "[CURR]<translation of new sentence>[/CURR]\n" +
-    "[PREV]<verbatim or revised>[/PREV]\n\n" +
+    "<d>keep</d> or <d>revise</d>\n" +
+    "<curr>translation of the new sentence</curr>\n" +
+    "<prev>previous translation, verbatim or revised</prev>\n\n" +
     "Examples:\n\n" +
     "(KEEP — prev complete, new unrelated)\n" +
     "prev_src: 今日は本当に楽しかったです。\n" +
     "prev_dst: 今天真的很开心。\n" +
     "new_src:  では、次に行きましょう。\n" +
-    "→ [D]keep[/D]\n" +
-    "  [CURR]那么，我们继续下一个吧。[/CURR]\n" +
-    "  [PREV]今天真的很开心。[/PREV]\n\n" +
+    "→ <d>keep</d>\n" +
+    "  <curr>那么，我们继续下一个吧。</curr>\n" +
+    "  <prev>今天真的很开心。</prev>\n\n" +
     "(REVISE — mid-clause cut, new completes thought)\n" +
     "prev_src: 私たちは慎重にこの問題を扱う必要があると\n" +
     "prev_dst: 我们需要慎重处理这个问题，\n" +
     "new_src:  思っていますが、時間がかかっても価値があります。\n" +
-    "→ [D]revise[/D]\n" +
-    "  [CURR]虽然会花时间，但这是值得的。[/CURR]\n" +
-    "  [PREV]我们认为需要慎重处理这个问题，[/PREV]\n\n" +
+    "→ <d>revise</d>\n" +
+    "  <curr>虽然会花时间，但这是值得的。</curr>\n" +
+    "  <prev>我们认为需要慎重处理这个问题，</prev>\n\n" +
     "(REVISE — figurative meaning revealed)\n" +
     "prev_src: このチームは本当に熱いですね。\n" +
     "prev_dst: 这支队伍真的很热。\n" +
     "new_src:  試合を諦めずに最後まで戦い抜きました。\n" +
-    "→ [D]revise[/D]\n" +
-    "  [CURR]他们没有放弃，战斗到了最后一刻。[/CURR]\n" +
-    "  [PREV]这支队伍真的很有热情。[/PREV]\n"
+    "→ <d>revise</d>\n" +
+    "  <curr>他们没有放弃，战斗到了最后一刻。</curr>\n" +
+    "  <prev>这支队伍真的很有热情。</prev>\n"
   );
 }
 
@@ -181,26 +181,35 @@ export function findLastPunct(text: string, includeSoft = false): number {
   return last;
 }
 
-// Incrementally parses Claude's [D][/D][CURR][/CURR][PREV][/PREV] paired
-// response. Streams CURR's inner text as soon as it arrives (chars that COULD
-// be the start of `[/CURR]` are held back so we never emit a partial closing
-// tag). [D] and [PREV] are extracted from the full buffer in finalize().
+// Incrementally parses the paired response <d>…</d><curr>…</curr><prev>…</prev>.
+// Streams the inner text of <curr> as soon as it arrives; characters that
+// could be the start of its closing tag are held back so a partial tag is
+// never shown. Tags are matched case-insensitively and with either bracket
+// on either side ("</CURR]", "[/curr]"), since models sometimes mix them.
+// <d> and <prev> are extracted from the full buffer in finalize().
+const tagRe = (name: string, close: boolean, flags = "i"): RegExp =>
+  new RegExp(`[<\\[]${close ? "\\/" : ""}${name}\\s*[>\\]]`, flags);
+const blockRe = (name: string): RegExp =>
+  new RegExp(`[<\\[]${name}\\s*[>\\]]\\s*([\\s\\S]*?)\\s*[<\\[]\\/${name}\\s*[>\\]]`, "i");
+// A suffix that may still grow into "</curr>": "<", "</", "</c", … "</curr".
+const CLOSE_CURR_PREFIX = /[<[](\/(c(u(r(r)?)?)?)?)?$/i;
+
 export class PairedStreamParser {
-  private static readonly CLOSE_CURR = "[/CURR]";
   full = "";
   private cursor = 0;
   private state: "before_curr" | "in_curr" | "done" = "before_curr";
 
-  // Returns whatever CURR text became safe to emit during this feed.
+  // Returns whatever <curr> text became safe to emit during this feed.
   feed(chunk: string): string {
     this.full += chunk;
     const out: string[] = [];
-    const CLOSE = PairedStreamParser.CLOSE_CURR;
     for (;;) {
       if (this.state === "before_curr") {
-        const idx = this.full.indexOf("[CURR]", this.cursor);
-        if (idx < 0) break;
-        this.cursor = idx + "[CURR]".length;
+        const open = tagRe("curr", false, "ig");
+        open.lastIndex = this.cursor;
+        const m = open.exec(this.full);
+        if (!m) break;
+        this.cursor = m.index + m[0].length;
         // skip leading whitespace inside the block
         while (this.cursor < this.full.length && " \t\n".includes(this.full[this.cursor])) {
           this.cursor += 1;
@@ -208,24 +217,20 @@ export class PairedStreamParser {
         this.state = "in_curr";
       }
       if (this.state === "in_curr") {
-        const end = this.full.indexOf(CLOSE, this.cursor);
-        if (end >= 0) {
-          const text = this.full.slice(this.cursor, end).replace(/\s+$/u, ""); // rstrip
+        const close = tagRe("curr", true, "ig");
+        close.lastIndex = this.cursor;
+        const m = close.exec(this.full);
+        if (m) {
+          const text = this.full.slice(this.cursor, m.index).replace(/\s+$/u, ""); // rstrip
           if (text) out.push(text);
-          this.cursor = end + CLOSE.length;
+          this.cursor = m.index + m[0].length;
           this.state = "done";
           continue;
         }
-        // No closing tag yet. Hold back chars that could be the start of
-        // "[/CURR]" — emit everything else.
+        // No closing tag yet: emit everything but a possible start of one.
         let tail = this.full.length;
-        const maxHold = Math.min(CLOSE.length - 1, tail - this.cursor);
-        for (let i = maxHold; i > 0; i--) {
-          if (this.full.endsWith(CLOSE.slice(0, i))) {
-            tail -= i;
-            break;
-          }
-        }
+        const hold = CLOSE_CURR_PREFIX.exec(this.full.slice(this.cursor));
+        if (hold) tail -= hold[0].length;
         if (tail > this.cursor) {
           out.push(this.full.slice(this.cursor, tail));
           this.cursor = tail;
@@ -238,9 +243,9 @@ export class PairedStreamParser {
   }
 
   finalize(): { decision: string | null; prev: string | null; curr: string } {
-    const dM = /\[D\]\s*(\w+)\s*\[\/D\]/i.exec(this.full);
-    const pM = /\[PREV\]\s*([\s\S]*?)\s*\[\/PREV\]/.exec(this.full);
-    const cM = /\[CURR\]\s*([\s\S]*?)\s*\[\/CURR\]/.exec(this.full);
+    const dM = blockRe("d").exec(this.full);
+    const pM = blockRe("prev").exec(this.full);
+    const cM = blockRe("curr").exec(this.full);
     return {
       decision: dM ? dM[1].trim().toLowerCase() : null,
       prev: pM ? pM[1].trim() : null,
