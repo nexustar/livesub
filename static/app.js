@@ -167,10 +167,10 @@ async function generateHintsFromScene() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         description: desc,
-        // Pin glossary language to source_lang. The glossary is fed into
-        // qwen-asr's --prompt as a token-level bias; if it's in a different
-        // language than the audio, the bias is wasted (and may distort
-        // recognition). "auto" leaves Claude to infer from description.
+        // Pin glossary language to source_lang: it is matched against the
+        // source transcript (translator, Gemini custom vocabulary), so terms
+        // in another language are wasted. "auto" leaves Claude to infer from
+        // description.
         source_lang: currentSourceLang(),
       }),
     });

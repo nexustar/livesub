@@ -56,7 +56,6 @@ import {
 } from "./config.js";
 import {
   PairedStreamParser,
-  buildQwenPrompt,
   buildPairedTranslationSystemInstruction,
   buildTranslationPrompt,
   buildTranslationSystemInstruction,
@@ -358,8 +357,9 @@ export class Pipeline {
     ];
     const src = (this.sourceLang || "").trim().toLowerCase();
     if (src && src !== "auto") qwenCmd.push("--language", this.sourceLang);
-    const qwenPrompt = buildQwenPrompt(this.glossary);
-    if (qwenPrompt) qwenCmd.push("--prompt", qwenPrompt);
+    // No glossary --prompt: Qwen3-ASR (0.6B and 1.7B) copies the term list
+    // into the transcript, whole lists at a time. The glossary goes to the
+    // translator instead.
     if (chunkSec) qwenCmd.push("--stream-chunk-sec", chunkSec);
     // Committed text and the provisional tail, one JSON object per line.
     qwenCmd.push("--stream-json");
@@ -1396,7 +1396,7 @@ export class Pipeline {
   ): Promise<string> {
     if (!this.gemini) throw new Error("gemini client not configured");
     const prompt = buildTranslationPrompt(text, history, isPartial);
-    const sys = buildTranslationSystemInstruction(this.targetLang, this.sourceLang, this.scene);
+    const sys = buildTranslationSystemInstruction(this.targetLang, this.sourceLang, this.scene, this.glossary);
     // thinkingLevel, not thinkingBudget: gemini-3.5-flash-lite 400s on
     // thinkingBudget: 0.
     const config = { systemInstruction: sys, thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL }, temperature: 0.2 };
@@ -1453,7 +1453,7 @@ export class Pipeline {
       this.claude = new Anthropic({ apiKey: apiKey || "dummy", ...(backendCfg.base_url ? { baseURL: backendCfg.base_url } : {}) });
     }
 
-    const sys = buildTranslationSystemInstruction(this.targetLang, this.sourceLang, this.scene);
+    const sys = buildTranslationSystemInstruction(this.targetLang, this.sourceLang, this.scene, this.glossary);
     const messages = this.buildClaudeMessages(history, text, isPartial);
 
     let attempts = 0;
@@ -1518,7 +1518,7 @@ export class Pipeline {
       this.openaiClient = new OpenAI({ apiKey: apiKey || "dummy", ...(backendCfg.base_url ? { baseURL: backendCfg.base_url } : {}) });
     }
 
-    const sys = buildTranslationSystemInstruction(this.targetLang, this.sourceLang, this.scene);
+    const sys = buildTranslationSystemInstruction(this.targetLang, this.sourceLang, this.scene, this.glossary);
     const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [{ role: "system", content: sys }];
     for (const [s, d] of history) {
       messages.push({ role: "user", content: `Translate: ${s}` });
@@ -1573,7 +1573,7 @@ export class Pipeline {
     if (!backendCfg || backendCfg.sdk !== "anthropic") return { curr: "", prevRevised: null };
     const model = backendCfg.model as string;
 
-    const sys = buildPairedTranslationSystemInstruction(this.targetLang, this.sourceLang, this.scene);
+    const sys = buildPairedTranslationSystemInstruction(this.targetLang, this.sourceLang, this.scene, this.glossary);
     const messages: Anthropic.MessageParam[] = [];
     for (const [s, d] of history) {
       messages.push({ role: "user", content: `Translate: ${s}` });

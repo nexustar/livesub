@@ -1,6 +1,5 @@
 // Prompt builders, sentence-boundary helpers, and the streaming paired-response
-// parser — a direct port of the "prompts" and "helpers" sections of server.py.
-// The prompt text is byte-for-byte identical so model behaviour is unchanged.
+// parser — ported from the "prompts" and "helpers" sections of server.py.
 
 import { SENTENCE_PUNCT, SENTENCE_PUNCT_SOFT } from "./config.js";
 
@@ -18,10 +17,10 @@ export function buildHintsSystemPrompt(sourceLang: string): string {
   } else {
     glossaryLangRule =
       `ALL entries must be in ${src}. The audio source language is ` +
-      `${src}; the glossary is consumed by an ASR system that biases ` +
-      `${src} tokens. Entries in any other language (including the ` +
-      `target translation language) are useless and may distort ` +
-      `recognition. If you only know an entry's English / Chinese ` +
+      `${src}; the glossary is matched against ${src} transcripts. ` +
+      `Entries in any other language (including the target ` +
+      `translation language) are useless. If you only know an ` +
+      `entry's English / Chinese ` +
       `transliteration, search the web to find the ${src} original ` +
       `(or omit it).`;
     glossaryLangHint = `, all in ${src}`;
@@ -39,9 +38,9 @@ export function buildHintsSystemPrompt(sourceLang: string): string {
     "2. GLOSSARY: a comma-separated list of proper nouns, names, and " +
     "specialty terms that may appear. " +
     `${glossaryLangRule} ` +
-    "Used as a soft prompt to bias the speech recognizer at the token " +
-    "level — the prompt language MUST match the audio language for the " +
-    "bias to work.\n\n" +
+    "The translator uses it to restore names that speech recognition " +
+    "misheard, and the Gemini recognizer takes it as custom vocabulary, " +
+    "so entries MUST be in the audio language.\n\n" +
     "Rules:\n" +
     "- Search the web when the input refers to a specific real-world " +
     "thing (concert, show, person, event, anime, sports, technical " +
@@ -71,14 +70,19 @@ export function parseHintsResponse(raw: string): { scene: string; glossary: stri
 
 // ---------- ASR / translation prompts ----------
 
-// qwen-asr --prompt: terminology / spelling bias for the decoder. Glossary
-// only — NOT scene (mixing target-language scene text confuses qwen's language
-// detection). Capped at 500 chars.
-export function buildQwenPrompt(glossary: string): string {
-  return glossary ? glossary.slice(0, 500) : "";
+// The source text comes from speech recognition, which writes names it does
+// not know as similar-sounding words (結女体育祭 -> 遊女大祭祭).
+function glossaryNote(glossary: string): string {
+  return (
+    `Glossary (names and terms that may occur): ${glossary}\n` +
+    "The source text comes from speech recognition, which writes names it " +
+    "does not know as similar-sounding words. When a word sounds like a " +
+    "glossary term and the context fits, translate it as that term. Still " +
+    "output only the translation."
+  );
 }
 
-export function buildTranslationSystemInstruction(targetLang: string, sourceLang: string, scene: string): string {
+export function buildTranslationSystemInstruction(targetLang: string, sourceLang: string, scene: string, glossary = ""): string {
   const parts: string[] = [
     `You are a translator. Translate the user's utterance into ${targetLang}. ` +
       "Output ONLY the translation. No preamble, no quotes, no commentary. " +
@@ -88,13 +92,14 @@ export function buildTranslationSystemInstruction(targetLang: string, sourceLang
   const src = (sourceLang || "").trim();
   if (src && src.toLowerCase() !== "auto") parts.push(`Source language: ${src}.`);
   if (scene) parts.push(`Scene: ${scene}`);
+  if (glossary) parts.push(glossaryNote(glossary));
   return parts.join("\n\n");
 }
 
 // Paired-translation system instruction (Claude only). Per-turn the model also
 // reconsiders the IMMEDIATELY PREVIOUS sentence's translation given the new
 // context. 3-shot prompt validated 10/10 against a 10-case battery on Haiku 4.5.
-export function buildPairedTranslationSystemInstruction(targetLang: string, sourceLang: string, scene: string): string {
+export function buildPairedTranslationSystemInstruction(targetLang: string, sourceLang: string, scene: string, glossary = ""): string {
   let head =
     `Real-time ${targetLang} interpreter. Each turn, also reconsider ` +
     "the previous translation given the new sentence.\n\n" +
@@ -109,6 +114,7 @@ export function buildPairedTranslationSystemInstruction(targetLang: string, sour
   const src = (sourceLang || "").trim();
   if (src && src.toLowerCase() !== "auto") head += `\n\nSource language: ${src}.`;
   if (scene) head += `\n\nScene: ${scene}`;
+  if (glossary) head += `\n\n${glossaryNote(glossary)}`;
   return (
     head +
     "\n\nOutput ONLY the three blocks:\n" +
