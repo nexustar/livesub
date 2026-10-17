@@ -1074,13 +1074,12 @@ export class Pipeline {
   private async onTranscriptUpdate(commit: string, tail: string): Promise<void> {
     const now = monotonic();
     if ((commit || tail) && this.currentSegFirstChunk === 0) this.currentSegFirstChunk = now;
-    let cut = false;
     if (commit) {
       this.sentenceBuffer += commit;
       // Same leading-space strip as onTranscriptChunk (see the note there).
       if (/^\s/u.test(this.sentenceBuffer)) this.sentenceBuffer = this.sentenceBuffer.replace(/^\s+/u, "");
       this.lastChunkTime = now;
-      cut = await this.cutSentence(true);
+      await this.cutSentence(true);
     }
     const live = (this.sentenceBuffer + tail).replace(/^\s+/u, "");
     const sid = this.nextSid;
@@ -1089,7 +1088,9 @@ export class Pipeline {
       this.liveSid = sid;
       this.liveText = live;
     }
-    if (commit && !cut) await this.maybeTriggerPartial();
+    // After a cut the rest of the buffer is a new sentence; translate it
+    // now rather than at the next update, which is a chunk away.
+    if (commit) await this.maybeTriggerPartial();
   }
 
   // Dispatch a sentence from sentenceBuffer if a boundary is present. Returns
@@ -1169,6 +1170,11 @@ export class Pipeline {
     this.inFlightPartial = handle;
     void this.runPartial(sid, rev, snapshot, historySnapshot, ac.signal).finally(() => {
       handle.done = true;
+      // A trigger dropped while this was in flight would otherwise wait for
+      // the next ASR update, which with local qwen is a whole chunk away.
+      if (!this.stopRequested && !ac.signal.aborted && this.inFlightPartial === handle && this.nextSid === sid) {
+        void this.maybeTriggerPartial();
+      }
     });
   }
 
