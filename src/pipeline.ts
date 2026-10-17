@@ -296,7 +296,7 @@ export class Pipeline {
         await this.dashscopeAsrWorker();
       } else {
         // Gemini transcribe-live: sessions cap at ~10 min; reopen on go_away,
-        // unexpected turn_complete, or error until the client hangs up.
+        // a final, turn_complete, or error until the client hangs up.
         while (!this.stopRequested) {
           try {
             await this.runOneAsrSession();
@@ -942,7 +942,6 @@ export class Pipeline {
     let interimConsumed = 0;
     let lastInterim = "";
     let lastInterimAt = 0;
-    let guardText = ""; // pre-final hypothesis, for continuation detection
 
     // Forward the held-back tail (idle hypothesis / session ending).
     const flushTail = async (): Promise<void> => {
@@ -980,29 +979,19 @@ export class Pipeline {
         }
         const sc = resp.serverContent;
         if (!sc) continue;
-        // A final can fire on pauses even with VAD off. Ignore its text
-        // (restates the interims, different spacing), but the next interim
-        // usually restarts from scratch: flush the old tail, reset tracking.
-        // guardText covers the sessions where the interim does NOT restart.
+        // The single held-open activity gets a final after about 220 s of
+        // audio, and the session transcribes little after it (on a 30-min
+        // broadcast 63% of the speech went missing). Its text restates the
+        // interims: flush the tail and reopen; queued audio is kept.
         const fin = sc.inputTranscription?.text;
         if (fin) {
-          log.info(`ASR final segment (${fin.length} chars); expecting interim restart`);
+          log.info(`ASR final segment (${fin.length} chars); reopening session`);
+          await this.safeSendJson({ type: "asr_session", state: "reset" });
           await flushTail();
-          guardText = lastInterim;
-          interimConsumed = 0;
-          lastInterim = "";
-          lastInterimAt = 0;
+          return;
         }
         const interim = sc.interimInputTranscription?.text;
         if (interim) {
-          if (guardText) {
-            let lcp = 0;
-            const n = Math.min(interim.length, guardText.length);
-            while (lcp < n && interim.charCodeAt(lcp) === guardText.charCodeAt(lcp)) lcp += 1;
-            // >=80% prefix overlap -> never restarted; restore the old offset.
-            if (lcp >= guardText.length * 0.8) interimConsumed = guardText.length;
-            guardText = "";
-          }
           lastInterim = interim;
           lastInterimAt = monotonic();
           const target = interim.length - GEMINI_INTERIM_HOLDBACK_CHARS;
