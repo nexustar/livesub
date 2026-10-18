@@ -507,6 +507,20 @@ let muteGain = null;
 let analyserNode = null;
 let vuRafId = null;
 let recording = false;
+let pcmRate = 16000;  // what the worklet sends; sizes the reconnect backlog
+
+// Unexpected closes reopen the session on the same capture; 1003 (config
+// refused) is final. A transcript or RECONNECT_STABLE_MS of uptime resets the
+// failure count.
+const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 16000];
+const RECONNECT_STABLE_MS = 30000;
+// Audio captured while disconnected, replayed after the next config.
+const RECONNECT_BACKLOG_SEC = 15;
+let wsReady = false;  // config sent; audio may flow
+let reconnectTimer = null;
+let reconnectFailures = 0;
+let audioBacklog = [];
+let audioBacklogBytes = 0;
 
 let asrSessionCount = 0;
 let translationsDone = 0;
@@ -852,175 +866,13 @@ async function start() {
     sourceNode.connect(analyserNode);
     startVU();
 
-    setStatus("connecting…");
-    // Resolve the /ws endpoint relative to the page's base URI so the app works
-    // under a non-root path (reverse-proxy subpath), not just at the domain root.
-    const wsBase = new URL("ws", document.baseURI);
-    const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
-    ws = new WebSocket(`${wsProto}//${wsBase.host}${wsBase.pathname}`);
-    ws.binaryType = "arraybuffer";
-
-    ws.onopen = () => {
-      ws.send(JSON.stringify({
-        type: "config",
-        target_lang: (targetLangInput.value || "Chinese (Simplified)").trim(),
-        source_lang: currentSourceLang(),
-        scene: sceneInput.value.trim(),
-        glossary: glossaryInput.value.trim(),
-        asr_backend: asrBackendSel.value || "gemini",
-        translate_backend: translateBackendSel.value || "gemini",
-        qwen_chunk_sec: Number(qwenChunkSec(asrBackendSel.value)),
-      }));
-      // Tag <body> so CSS can hide the redundant transcript line in
-      // passthrough mode (when we mirror src into the translation slot).
-      document.body.dataset.translateBackend =
-          translateBackendSel.value || "gemini";
-      workletNode.port.onmessage = (e) => {
-        if (ws && ws.readyState === WebSocket.OPEN) ws.send(e.data);
-      };
-    };
-
-    ws.onmessage = (e) => {
-      let msg;
-      try { msg = JSON.parse(e.data); } catch { return; }
-      switch (msg.type) {
-        case "ready":
-          setStatus("listening");
-          break;
-        case "transcript": {
-          const s = getOrCreate(msg.sid);
-          s.src += msg.text;
-          render();
-          break;
-        }
-        case "transcript_replace": {
-          // Used by backends that stream a cumulative transcript that
-          // revises itself mid-segment (DashScope qwen3-asr-flash-realtime).
-          // Overwrite src wholesale instead of appending.
-          const s = getOrCreate(msg.sid);
-          s.src = msg.text;
-          render();
-          break;
-        }
-        case "transcript_done": {
-          const s = getOrCreate(msg.sid);
-          s.srcDone = true;
-          render();
-          break;
-        }
-        case "translation_revision": {
-          // A new revision (partial or final) starts.
-          //   First revision (dst still empty): stream chunks directly so
-          //   the user sees translation tokens flow in as Claude emits them.
-          //   Subsequent revisions: buffer in pendingDst, atomically swap on
-          //   translation_done — keeps the visible dst stable, no flicker.
-          const s = getOrCreate(msg.sid);
-          if (msg.rev >= s.currentRev) {
-            s.currentRev = msg.rev;
-            if (s.dst) {
-              s.usePending = true;
-              s.pendingDst = "";
-            } else {
-              s.usePending = false;
-            }
-            render();
-          }
-          break;
-        }
-        case "translation": {
-          const s = getOrCreate(msg.sid);
-          // Drop chunks from a stale revision that was cancelled/superseded.
-          if (msg.rev != null && msg.rev !== s.currentRev) break;
-          if (s.usePending) {
-            // Invisible accumulation — no render() until done-swap.
-            s.pendingDst += msg.text;
-          } else {
-            s.dst += msg.text;
-            render();
-          }
-          break;
-        }
-        case "translation_done": {
-          const s = getOrCreate(msg.sid);
-          // Stale done — ignore.
-          if (msg.rev != null && msg.rev !== s.currentRev) break;
-          // Atomic swap: replace the visible dst with the buffered version,
-          // but ONLY if the upstream stream succeeded. msg.ok === false
-          // means Claude / Gemini raised mid-stream (502, network, etc.) —
-          // the pendingDst is empty or half-formed and would clobber the
-          // previously-shown good translation. Discard it instead.
-          if (s.usePending) {
-            if (msg.ok !== false) {
-              s.dst = s.pendingDst;
-              render();
-            } else {
-              console.log(
-                `[translation_done] sid=${msg.sid} rev=${msg.rev} failed; keeping previous dst`
-              );
-            }
-            s.pendingDst = "";
-            s.usePending = false;
-          }
-          // Only the FINAL revision locks the sentence. Partial revs keep
-          // the sentence alive for more updates.
-          if (msg.final) {
-            s.dstDone = true;
-            translationsDone++;
-            translationsPending = Math.max(0, translationsPending - 1);
-            updateBadges();
-            // Promote finished sentences to PREV in sid order (with slide-in
-            // animation); the old PREV gets pushed to history.
-            promoteReady();
-            render();
-          }
-          break;
-        }
-        case "translation_start":
-          translationsPending++;
-          updateBadges();
-          break;
-        case "prev_revised":
-          // Claude (paired-translation) revised the previous sentence's
-          // translation in light of the new sentence. Update wherever it
-          // currently lives (history list or live captions).
-          if (msg.sid != null && typeof msg.text === "string") {
-            applyPrevRevision(msg.sid, msg.text);
-          }
-          break;
-        case "asr_session": {
-          // asr_session events: {state: "open"|"reset"|"go_away"}.
-          // Status bar stays at "listening" — the per-turn counter was
-          // diagnostic noise for normal users (Gemini Live increments it
-          // every sentence). The debug badge still reflects the count.
-          if (msg.state === "open") asrSessionCount++;
-          updateBadges();
-          break;
-        }
-        case "audio_stats":
-          // {peak, chunks_per_sec}
-          lastServerPeak = msg.peak || 0;
-          updateBadges();
-          break;
-        case "error":
-          setStatus("error: " + msg.message);
-          badgeAsrEl.classList.add("error");
-          console.error("server error:", msg.message);
-          break;
-      }
-    };
-
-    ws.onerror = (e) => console.error("ws error", e);
-    ws.onclose = async (e) => {
-      if (recording) await stop();
-      // A session the server refused carries its reason; stop() resets the
-      // status, so set it afterwards.
-      setStatus(e.reason ? `error: ${e.reason}` : "disconnected");
-    };
-
+    pcmRate = targetRate;
+    workletNode.port.onmessage = (e) => sendAudio(e.data);
     recording = true;
     setToggleState(true);
     lockSettings(true);
     renderWelcome();
+    connect();
   } catch (err) {
     console.error(err);
     setStatus("error: " + err.message);
@@ -1028,8 +880,255 @@ async function start() {
   }
 }
 
+// Until the socket has its config, audio goes to the bounded backlog.
+function sendAudio(buf) {
+  if (wsReady && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(buf);
+    return;
+  }
+  audioBacklog.push(buf);
+  audioBacklogBytes += buf.byteLength;
+  const cap = RECONNECT_BACKLOG_SEC * pcmRate * 2;  // 16-bit mono
+  while (audioBacklogBytes > cap && audioBacklog.length > 1) {
+    audioBacklogBytes -= audioBacklog.shift().byteLength;
+  }
+}
+
+function clearAudioBacklog() {
+  audioBacklog = [];
+  audioBacklogBytes = 0;
+}
+
+// Open a session socket; called by start() and by the reconnect timer.
+function connect() {
+  setStatus(reconnectFailures ? "reconnecting…" : "connecting…");
+  // Resolve the /ws endpoint relative to the page's base URI so the app works
+  // under a non-root path (reverse-proxy subpath), not just at the domain root.
+  const wsBase = new URL("ws", document.baseURI);
+  const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+  const sock = new WebSocket(`${wsProto}//${wsBase.host}${wsBase.pathname}`);
+  sock.binaryType = "arraybuffer";
+  ws = sock;
+  wsReady = false;
+  let openedAt = 0;
+  let gotTranscript = false;
+  let lastError = "";
+
+  sock.onopen = () => {
+    openedAt = Date.now();
+    sock.send(JSON.stringify({
+      type: "config",
+      target_lang: (targetLangInput.value || "Chinese (Simplified)").trim(),
+      source_lang: currentSourceLang(),
+      scene: sceneInput.value.trim(),
+      glossary: glossaryInput.value.trim(),
+      asr_backend: asrBackendSel.value || "gemini",
+      translate_backend: translateBackendSel.value || "gemini",
+      qwen_chunk_sec: Number(qwenChunkSec(asrBackendSel.value)),
+    }));
+    // Tag <body> so CSS can hide the redundant transcript line in
+    // passthrough mode (when we mirror src into the translation slot).
+    document.body.dataset.translateBackend =
+        translateBackendSel.value || "gemini";
+    // The server buffers audio that arrives right behind the config.
+    for (const buf of audioBacklog) sock.send(buf);
+    clearAudioBacklog();
+    wsReady = true;
+  };
+
+  sock.onmessage = (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    switch (msg.type) {
+      case "ready":
+        setStatus("listening");
+        break;
+      case "transcript": {
+        gotTranscript = true;
+        const s = getOrCreate(msg.sid);
+        s.src += msg.text;
+        render();
+        break;
+      }
+      case "transcript_replace": {
+        // Used by backends that stream a cumulative transcript that
+        // revises itself mid-segment (DashScope qwen3-asr-flash-realtime).
+        // Overwrite src wholesale instead of appending.
+        gotTranscript = true;
+        const s = getOrCreate(msg.sid);
+        s.src = msg.text;
+        render();
+        break;
+      }
+      case "transcript_done": {
+        const s = getOrCreate(msg.sid);
+        s.srcDone = true;
+        render();
+        break;
+      }
+      case "translation_revision": {
+        // A new revision (partial or final) starts.
+        //   First revision (dst still empty): stream chunks directly so
+        //   the user sees translation tokens flow in as Claude emits them.
+        //   Subsequent revisions: buffer in pendingDst, atomically swap on
+        //   translation_done — keeps the visible dst stable, no flicker.
+        const s = getOrCreate(msg.sid);
+        if (msg.rev >= s.currentRev) {
+          s.currentRev = msg.rev;
+          if (s.dst) {
+            s.usePending = true;
+            s.pendingDst = "";
+          } else {
+            s.usePending = false;
+          }
+          render();
+        }
+        break;
+      }
+      case "translation": {
+        const s = getOrCreate(msg.sid);
+        // Drop chunks from a stale revision that was cancelled/superseded.
+        if (msg.rev != null && msg.rev !== s.currentRev) break;
+        if (s.usePending) {
+          // Invisible accumulation — no render() until done-swap.
+          s.pendingDst += msg.text;
+        } else {
+          s.dst += msg.text;
+          render();
+        }
+        break;
+      }
+      case "translation_done": {
+        const s = getOrCreate(msg.sid);
+        // Stale done — ignore.
+        if (msg.rev != null && msg.rev !== s.currentRev) break;
+        // Atomic swap: replace the visible dst with the buffered version,
+        // but ONLY if the upstream stream succeeded. msg.ok === false
+        // means Claude / Gemini raised mid-stream (502, network, etc.) —
+        // the pendingDst is empty or half-formed and would clobber the
+        // previously-shown good translation. Discard it instead.
+        if (s.usePending) {
+          if (msg.ok !== false) {
+            s.dst = s.pendingDst;
+            render();
+          } else {
+            console.log(
+              `[translation_done] sid=${msg.sid} rev=${msg.rev} failed; keeping previous dst`
+            );
+          }
+          s.pendingDst = "";
+          s.usePending = false;
+        }
+        // Only the FINAL revision locks the sentence. Partial revs keep
+        // the sentence alive for more updates.
+        if (msg.final) {
+          s.dstDone = true;
+          translationsDone++;
+          translationsPending = Math.max(0, translationsPending - 1);
+          updateBadges();
+          // Promote finished sentences to PREV in sid order (with slide-in
+          // animation); the old PREV gets pushed to history.
+          promoteReady();
+          render();
+        }
+        break;
+      }
+      case "translation_start":
+        translationsPending++;
+        updateBadges();
+        break;
+      case "prev_revised":
+        // Claude (paired-translation) revised the previous sentence's
+        // translation in light of the new sentence. Update wherever it
+        // currently lives (history list or live captions).
+        if (msg.sid != null && typeof msg.text === "string") {
+          applyPrevRevision(msg.sid, msg.text);
+        }
+        break;
+      case "asr_session": {
+        // asr_session events: {state: "open"|"reset"|"go_away"}.
+        // Status bar stays at "listening" — the per-turn counter was
+        // diagnostic noise for normal users (Gemini Live increments it
+        // every sentence). The debug badge still reflects the count.
+        if (msg.state === "open") asrSessionCount++;
+        updateBadges();
+        break;
+      }
+      case "audio_stats":
+        // {peak, chunks_per_sec}
+        lastServerPeak = msg.peak || 0;
+        updateBadges();
+        break;
+      case "error":
+        lastError = msg.message;
+        setStatus("error: " + msg.message);
+        badgeAsrEl.classList.add("error");
+        console.error("server error:", msg.message);
+        break;
+    }
+  };
+
+  sock.onerror = (e) => console.error("ws error", e);
+  sock.onclose = async (e) => {
+    if (ws !== sock) return;
+    ws = null;
+    wsReady = false;
+    if (!recording) return;
+    if (gotTranscript || (openedAt && Date.now() - openedAt >= RECONNECT_STABLE_MS)) {
+      reconnectFailures = 0;
+    }
+    const reason = e.reason || lastError;
+    // A socket that never opened (server down, no network) retries forever.
+    const n = RECONNECT_DELAYS_MS.length;
+    if (e.code === 1003 || (openedAt && reconnectFailures >= n)) {
+      await stop();
+      // A session the server refused carries its reason; stop() resets the
+      // status, so set it afterwards.
+      setStatus(reason ? `error: ${reason}` : "disconnected");
+      return;
+    }
+    const delay = RECONNECT_DELAYS_MS[Math.min(reconnectFailures, n - 1)];
+    reconnectFailures++;
+    console.warn(`ws closed (code ${e.code}${reason ? `, ${reason}` : ""}); reconnecting in ${delay} ms`);
+    retireSentences();
+    translationsPending = 0;
+    updateBadges();
+    setStatus(`${reason ? `error: ${reason}; ` : "disconnected, "}retrying in ${delay / 1000}s…`);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (recording) connect();
+    }, delay);
+  };
+}
+
+// Move on-screen sentences into history and drop their state: each
+// connection restarts sids at 0, so stale entries would catch new sentences.
+function retireSentences() {
+  const onScreen = [...sentences.values()]
+    .filter((s) => !s.archived && (s.sid === prevSlotSid || s.src.trim()))
+    .sort((a, b) => a.sid - b.sid);
+  for (const s of onScreen) appendToHistory(s);
+  prevCardEl.hidden = true;
+  prevCardEl.classList.remove("entering");
+  prevTranscriptEl.textContent = "";
+  prevTranslationEl.textContent = "";
+  prevSlotSid = null;
+  sentences.clear();
+  for (const item of historyEl.querySelectorAll(".history-item[data-sid]")) {
+    item.removeAttribute("data-sid");
+  }
+  transcriptEl.textContent = "";
+  translationEl.textContent = "";
+  latestEl.textContent = "";
+  latestEl.hidden = true;
+}
+
 async function stop() {
   recording = false;
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  reconnectFailures = 0;
+  clearAudioBacklog();
   stopVU();
   if (workletNode) {
     workletNode.port.onmessage = null;
@@ -1062,32 +1161,8 @@ async function stop() {
     try { ws.close(); } catch {}
     ws = null;
   }
-  // Push the PREV card's content into history, then drop all sentence
-  // state. The server resets `next_sid` to 0 on every new WS connection,
-  // so without this clear the next session's transcripts for sid=0/1/...
-  // would `getOrCreate` and resurrect the previously-archived entries —
-  // new content gets routed into stale `srcDone:true` records, render()
-  // can't promote them as "current", and the UI shows empty captions
-  // with old prev+history below. Strip data-sid off existing history
-  // items for the same reason: the next session's `prev_revised` events
-  // (sids start at 0 again) would otherwise target the wrong DOM nodes.
-  if (prevSlotSid !== null) {
-    const oldPrev = sentences.get(prevSlotSid);
-    if (oldPrev) appendToHistory(oldPrev);
-    prevCardEl.hidden = true;
-    prevCardEl.classList.remove("entering");
-    prevTranscriptEl.textContent = "";
-    prevTranslationEl.textContent = "";
-    prevSlotSid = null;
-  }
-  sentences.clear();
-  for (const item of historyEl.querySelectorAll(".history-item[data-sid]")) {
-    item.removeAttribute("data-sid");
-  }
-  transcriptEl.textContent = "";
-  translationEl.textContent = "";
-  latestEl.textContent = "";
-  latestEl.hidden = true;
+  wsReady = false;
+  retireSentences();
   setToggleState(false);
   lockSettings(false);
   setStatus("idle");
