@@ -5,7 +5,7 @@
 //                                │                               │
 //                                └── transcript / translation events ──► client WS
 //
-// plus idleFlushLoop (0.5s tick). The landmines called out in CLAUDE.md are
+// plus idleFlushLoop (0.5s tick). The landmines called out in AGENTS.md are
 // preserved verbatim: the leading-space lstrip in onTranscriptChunk, `cut <= 0`
 // in the length fallback, the qwen `--skip-silence` / `--past-text yes` flags
 // (and no --repeat-penalty), the silent->speech pre-buffer replay, the Gemini
