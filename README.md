@@ -15,7 +15,8 @@ livesub
 ```
 
 Open <http://localhost:8000>, download the speech model when asked, pick
-**🎤 Mic** or **📺 Tab** and press **Start**.
+**🎤 Mic** or **📺 Tab** and press **Start**. **Pop out** moves the
+captions into a small always-on-top window you can place over the video.
 
 For translation, create a `.env` file with a key, e.g.
 `DEEPSEEK_API_KEY=sk-...`, and start livesub from the folder that holds

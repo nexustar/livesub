@@ -66,6 +66,9 @@ button.secondary:hover { background: #1a1a1a; color: #ccc; }
    up determined solely by `.icon` line-box — so they must match or the
    buttons render at different heights. */
 button .icon { line-height: 1; }
+/* `display: inline-flex` above would otherwise beat the hidden attribute. */
+#pip[hidden] { display: none; }
+#pip.active { color: #60a5fa; border-color: #1e3a8a; }
 
 #input-source,
 #asr-backend,
@@ -564,6 +567,23 @@ body[data-translate-backend="none"] .history-item .src {
   display: none;
 }
 
+/* ───────── Pop-out (Document Picture-in-Picture) ───────── */
+
+/* The PiP window loads this stylesheet too; the main page shows a note in
+   the stack's place. */
+#pip-note {
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
+  color: #777;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+#pip-note[hidden] { display: none; }
+body.welcome-shown #pip-note { display: none; }
+
 /* ───────── History (takes the rest, scrollable) ───────── */
 
 /* History is the ARCHIVED region. Recessed background + a soft top
@@ -781,6 +801,7 @@ body.welcome-shown #caption-stack { display: none; }
 @media (max-width: 600px), (max-height: 200px) {
   #toggle .label,
   #settings-toggle .label,
+  #pip .label,
   #clear .label { display: none; }
   /* Equalize button height. ▶ / ⚙ / ✕ Unicode glyphs have different
      bounding-box heights, so without min-height the three buttons render

@@ -34,6 +34,14 @@
     <button id="settings-toggle" class="secondary">
       <span class="icon">⚙</span><span class="label">Settings</span>
     </button>
+    <!-- Only where Document Picture-in-Picture exists (Chrome / Edge). -->
+    <button id="pip" class="secondary" title="Show captions in an always-on-top window" hidden>
+      <!-- The usual picture-in-picture glyph: a small window in a large one. -->
+      <svg class="icon" viewBox="0 0 16 16" width="1em" height="1em" aria-hidden="true">
+        <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <rect x="8" y="8" width="5" height="4" rx="0.5" fill="currentColor"/>
+      </svg><span class="label">Pop out</span>
+    </button>
     <button id="clear" class="secondary"><span class="icon">✕</span><span class="label">Clear</span></button>
   </div>
 
@@ -173,6 +181,11 @@
       <div id="translation" class="line translation"></div>
       <div id="latest" class="line transcript latest" hidden></div>
     </div>
+  </div>
+  <!-- Takes the caption stack's place while it is in the pop-out window. -->
+  <div id="pip-note" hidden>
+    Captions are in the pop-out window.
+    <button type="button" class="secondary" id="pip-return">Bring back</button>
   </div>
 
   <script src="static/app.js" type="module"></script>

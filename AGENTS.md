@@ -37,6 +37,7 @@ Each has a comment at the site.
 - Hints: keep `web_search_20250305` (newer versions slower and costlier), `max_tokens: 4096` (thinking counts against it), and the effort level. Gemini hints stays `gemini-2.5-flash` (no free-tier Search grounding on 3.x).
 - Model downloads: files land as `.part` and are renamed only after the size and sha256 check; the HF revision, sizes and hashes in `QWEN_MODELS` change together. Model POSTs require a JSON content type so other sites can't trigger multi-GB downloads.
 - Frontend: polled UI (model rows, the welcome card) is updated in place, not rebuilt, so a click isn't lost mid-poll; `#settings-panel [hidden] { display: none }` must stay, as row/button display rules otherwise beat the `hidden` attribute.
+- Pop out moves the `#caption-stack` node itself into the Document PiP window, so caption code must keep using the element references taken at load, not `document.getElementById` at render time; body classes the caption CSS needs are mirrored (`PIP_BODY_CLASSES`).
 - Model IDs were last re-evaluated 2026-10 with measurements; confirm before bumping.
 
 ## Conventions

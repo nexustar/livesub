@@ -1194,6 +1194,69 @@ clearBtn.addEventListener("click", () => {
   renderWelcome();
 });
 
+// ---------- Pop-out captions (Document Picture-in-Picture) ----------
+
+// The caption stack node itself moves into the PiP window and back, so the
+// element references above stay valid. Chrome / Edge only.
+const pipBtn = document.getElementById("pip");
+const pipNoteEl = document.getElementById("pip-note");
+const captionStackEl = document.getElementById("caption-stack");
+// Mirrored to the PiP body (welcome-shown / settings-open would hide the stack).
+const PIP_BODY_CLASSES = ["font-large", "debug-mode"];
+let pipWindow = null;
+
+function syncPipBody() {
+  if (!pipWindow) return;
+  const body = pipWindow.document.body;
+  for (const c of PIP_BODY_CLASSES) body.classList.toggle(c, document.body.classList.contains(c));
+  if (document.body.dataset.translateBackend) {
+    body.dataset.translateBackend = document.body.dataset.translateBackend;
+  }
+}
+new MutationObserver(syncPipBody).observe(document.body, {
+  attributes: true, attributeFilter: ["class", "data-translate-backend"],
+});
+
+async function openPip() {
+  // Fits both cards; a shorter window gets subtitle mode.
+  const win = await window.documentPictureInPicture.requestWindow({ width: 640, height: 260 });
+  const link = win.document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = new URL("static/style.css", document.baseURI).href;
+  win.document.head.append(link);
+  win.document.title = "LiveSub";
+  pipWindow = win;
+  syncPipBody();
+  win.document.body.append(captionStackEl);
+  pipNoteEl.hidden = false;
+  pipBtn.classList.add("active");
+  // Closed from its own button, or the opener navigated away.
+  win.addEventListener("pagehide", () => {
+    if (pipWindow !== win) return;
+    pipWindow = null;
+    pipNoteEl.before(captionStackEl);
+    pipNoteEl.hidden = true;
+    pipBtn.classList.remove("active");
+  });
+}
+
+if ("documentPictureInPicture" in window) {
+  pipBtn.hidden = false;
+  pipBtn.addEventListener("click", async () => {
+    if (pipWindow) {
+      pipWindow.close();
+      return;
+    }
+    try {
+      await openPip();
+    } catch (err) {
+      console.error(err);
+      setStatus("error: " + err.message);
+    }
+  });
+  document.getElementById("pip-return").addEventListener("click", () => pipWindow?.close());
+}
+
 // ---------- Welcome card ----------
 
 // Shown in the caption area while idle with nothing captioned yet: what's
