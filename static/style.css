@@ -89,6 +89,24 @@ button .icon { line-height: 1; }
   cursor: not-allowed;
 }
 
+/* Source icon over the select's left padding; clicks go through to it. */
+#input-source-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: #ddd;
+}
+#input-source-picker .icon {
+  position: absolute;
+  left: 9px;
+  font-size: 13px;
+  pointer-events: none;
+}
+#input-source-picker:not([data-source="mic"]) .icon-mic,
+#input-source-picker:not([data-source="screen"]) .icon-screen { display: none; }
+#input-source-picker:has(select:disabled) .icon { opacity: 0.5; }
+#input-source { padding-left: 26px; }
+
 #status {
   color: #999;
   font-size: 13px;
@@ -765,7 +783,8 @@ body.welcome-shown #caption-stack { display: none; }
    set of values regardless of .font-large. */
 @media (max-height: 200px) {
   #controls { padding: 4px 10px; gap: 6px; }
-  #controls #input-source { padding: 4px 6px; font-size: 12px; }
+  #controls #input-source { padding: 4px 6px 4px 24px; font-size: 12px; }
+  #input-source-picker .icon { left: 7px; font-size: 12px; }
   #status { font-size: 12px; }
   #vu { width: 50px; height: 6px; }
   .caption-zone { padding: 9px 14px; background: transparent; }
@@ -803,9 +822,7 @@ body.welcome-shown #caption-stack { display: none; }
   #settings-toggle .label,
   #pip .label,
   #clear .label { display: none; }
-  /* Equalize button height. ▶ / ⚙ / ✕ Unicode glyphs have different
-     bounding-box heights, so without min-height the three buttons render
-     at slightly different sizes. min-height matches the natural button
-     height when labels are shown (padding 6×2 + ~13px text line ≈ 28px). */
+  /* Glyphs and SVG icons differ in height; pin the buttons to their natural
+     labelled height (6×2 padding + ~13px line). */
   #controls button { min-height: 28px; }
 }

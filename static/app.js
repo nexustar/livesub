@@ -62,6 +62,12 @@ function currentSourceLang() {
   return (v || "auto").trim();
 }
 inputSourceSel.value = localStorage.getItem(LS_INPUT) || "mic";
+if (!inputSourceSel.value) inputSourceSel.value = "mic";  // stale saved value
+// Shows the picked source's icon (CSS keys on it).
+function syncInputSourceIcon() {
+  inputSourceSel.parentElement.dataset.source = inputSourceSel.value;
+}
+syncInputSourceIcon();
 sceneSeedInput.value = localStorage.getItem(LS_SCENE_SEED) || "";
 sceneInput.value = localStorage.getItem(LS_SCENE) || "";
 glossaryInput.value = localStorage.getItem(LS_GLOSSARY) || "";
@@ -422,6 +428,7 @@ hintGenerateBtn.addEventListener("click", generateHintsFromScene);
 
 inputSourceSel.addEventListener("change", () => {
   localStorage.setItem(LS_INPUT, inputSourceSel.value);
+  syncInputSourceIcon();
 });
 asrBackendSel.addEventListener("change", () => {
   localStorage.setItem(LS_ASR, asrBackendSel.value);
@@ -1420,7 +1427,7 @@ function welcomeReady(summary) {
   return [
     h("h2", {}, "Ready to caption"),
     h("ol", {},
-      h("li", {}, "Pick ", h("b", {}, "🎤 Mic"), ", or ", h("b", {}, "📺 Tab"),
+      h("li", {}, "Pick ", h("b", {}, "Mic"), ", or ", h("b", {}, "Tab"),
         " for a browser tab (turn on “Share tab audio”)."),
       h("li", {}, "Press ", h("b", {}, "Start"), "."),
     ),
