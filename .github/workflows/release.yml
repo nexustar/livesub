@@ -14,8 +14,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15]
+        os: [ubuntu-latest, macos-15, windows-latest]
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
 
@@ -31,15 +34,16 @@ jobs:
       # check the server is up with the qwen-asr binary found.
       - name: Run the packed package
         run: |
-          npm pack --pack-destination "$RUNNER_TEMP"
+          # No glob on the path: on Windows $RUNNER_TEMP has backslashes
+          tgz=$(npm pack --pack-destination "$RUNNER_TEMP" | tail -1)
           mkdir "$RUNNER_TEMP/app" && cd "$RUNNER_TEMP/app"
           npm init -y > /dev/null
-          npm install "$RUNNER_TEMP"/livesub-*.tgz
+          npm install "$RUNNER_TEMP/$tgz"
           LIVESUB_DATA_DIR="$RUNNER_TEMP/data" npx livesub > livesub.log 2>&1 &
-          for i in $(seq 30); do curl -sf localhost:8000/api/models > models.json && break; sleep 1; done
+          for i in $(seq 30); do curl -sf 127.0.0.1:8000/api/models > models.json && break; sleep 1; done
           cat livesub.log models.json
           grep -q '"available":true' models.json
-          curl -sf localhost:8000/ | grep -q 'id="welcome"'
+          curl -sf 127.0.0.1:8000/ | grep -q 'id="welcome"'
 
   publish:
     needs: test

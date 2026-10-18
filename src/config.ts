@@ -249,7 +249,7 @@ export function isLoopbackHost(h: string): boolean {
 }
 
 // Prebuilt qwen_asr from the qwen-asr npm package (an optional dependency:
-// npm skips it where it has no binary, e.g. Windows). On failure, bin is ""
+// npm skips it where it has no binary, e.g. Windows on arm64). On failure, bin is ""
 // and reason says why, for the UI.
 function packagedQwenBin(): { bin: string; reason: string } {
   try {

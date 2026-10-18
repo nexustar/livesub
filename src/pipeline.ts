@@ -132,6 +132,13 @@ async function drainStdin(s: Writable): Promise<void> {
   if (s.writableNeedDrain) await once(s, "drain");
 }
 
+// A C program block-buffers stdout when piped; wrap it with stdbuf for line
+// buffering, or run it as is if stdbuf is missing. Not on Windows: an MSYS
+// stdbuf on PATH works by LD_PRELOAD, which does nothing to a native .exe.
+function withLineBuffering(cmd: string[]): string[] {
+  return process.platform !== "win32" && which("stdbuf") !== null ? ["stdbuf", "-oL", ...cmd] : cmd;
+}
+
 // Wait for a child to exit, SIGKILL after `ms`.
 function waitExit(proc: ChildProcess, ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -394,9 +401,7 @@ export class Pipeline {
     // Committed text and the provisional tail, one JSON object per line.
     qwenCmd.push("--stream-json");
 
-    // qwen-asr block-buffers stdout when piped; wrap with stdbuf for line
-    // buffering. Falls back to raw command if stdbuf missing.
-    const cmd = which("stdbuf") !== null ? ["stdbuf", "-oL", ...qwenCmd] : qwenCmd;
+    const cmd = withLineBuffering(qwenCmd);
     log.info(`starting qwen-asr: ${cmd.join(" ")}`);
     await this.safeSendJson({ type: "asr_session", state: "open" });
 
@@ -429,7 +434,7 @@ export class Pipeline {
     }
 
     const voxCmd = [binPath, "-d", modelDir, "--stdin", "-I", `${VOXTRAL_INTERVAL_SEC}`, "--silent"];
-    const cmd = which("stdbuf") !== null ? ["stdbuf", "-oL", ...voxCmd] : voxCmd;
+    const cmd = withLineBuffering(voxCmd);
     log.info(`starting voxtral: ${cmd.join(" ")}`);
     await this.safeSendJson({ type: "asr_session", state: "open" });
 
@@ -611,8 +616,7 @@ export class Pipeline {
       outQueue.put(null);
       await Promise.allSettled([feedP, recvP]);
     }
-    log.info(`${label} subprocess exited (rc=${proc.exitCode})`);
-  }
+    log.info(`${label} subprocess exited (rc=${proc.exitCode})`);  }
 
   // ----- OpenAI Realtime ASR backend (gpt-realtime-whisper) -----
 
