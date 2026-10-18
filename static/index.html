@@ -39,18 +39,13 @@
 
   <div id="settings-panel" hidden>
    <div class="settings-form">
-    <div class="row">
-      <label for="asr-backend">Speech-to-text backend</label>
-      <select id="asr-backend">
-        <!-- options populated from /api/backends on load -->
-      </select>
+    <div class="settings-tabs" role="tablist">
+      <button type="button" role="tab" data-tab="session">Session</button>
+      <button type="button" role="tab" data-tab="backends">Backends</button>
+      <button type="button" role="tab" data-tab="display">Display</button>
     </div>
-    <div class="row">
-      <label for="translate-backend">Translation backend</label>
-      <select id="translate-backend">
-        <!-- options populated from /api/backends on load -->
-      </select>
-    </div>
+    <div class="settings-tab-body">
+    <div class="settings-tab" role="tabpanel" data-tab="session">
     <div class="row">
       <label for="source-lang-select">Source language</label>
       <!-- Normal mode: 11-language <select> = intersection of what every
@@ -90,43 +85,83 @@
       <input id="target-lang" type="text" placeholder="Chinese (Simplified)">
     </div>
     <div class="row span2" id="scene-seed-row">
-      <label for="scene-seed">
-        Topic for research <span class="muted">(optional)</span>
-        <span class="muted">— web searches to fill Scene + Glossary below, improving caption accuracy</span>
-      </label>
+      <label for="scene-seed">Topic for research <span class="optional">optional</span></label>
       <div class="hint-scene-row">
         <input id="scene-seed" type="text"
           placeholder="e.g. μ's Final Live concert; ICASSP 2026 keynote; FromSoftware Elden Ring stream">
         <button id="hint-generate" class="secondary" type="button">✨ Research</button>
       </div>
+      <p class="hint">Fills in Scene and Glossary from a web search.</p>
       <span id="hint-status" class="muted"></span>
     </div>
     <div class="row span2">
-      <label for="scene">Scene summary <span class="muted">(optional) — scenario, tone, or any other notes for the translator</span></label>
+      <label for="scene">Scene summary <span class="optional">optional</span></label>
       <textarea id="scene" rows="3"
         placeholder="e.g. Live concert by Japanese idol group μ's; use casual Chinese fan-slang and preserve idol terminology like 推し / ペンライト."></textarea>
+      <p class="hint">Notes for the translator: setting, tone, style.</p>
     </div>
     <div class="row span2">
-      <label for="glossary">Glossary <span class="muted">(optional) — names and specialty terms in the source language, comma-separated; helps the translator fix misheard names (and biases Gemini speech recognition)</span></label>
+      <label for="glossary">Glossary <span class="optional">optional</span></label>
       <textarea id="glossary" rows="4"
         placeholder="高坂穂乃果, 絢瀬絵里, μ's, アンコール, ペンライト, ..."></textarea>
+      <p class="hint">Names and terms in the source language, comma-separated.</p>
     </div>
+    </div>
+    <div class="settings-tab" role="tabpanel" data-tab="backends">
+    <div class="row">
+      <label for="asr-backend">Speech-to-text backend</label>
+      <select id="asr-backend">
+        <!-- options populated from /api/backends on load -->
+      </select>
+      <!-- Shown when the picked local model isn't downloaded yet. -->
+      <p class="hint asr-model-hint" id="asr-model-hint" hidden>
+        <span></span>
+        <button type="button" class="secondary"></button>
+      </p>
+    </div>
+    <div class="row">
+      <label for="translate-backend">Translation backend</label>
+      <select id="translate-backend">
+        <!-- options populated from /api/backends on load -->
+      </select>
+    </div>
+    <!-- Only when the qwen_asr binary was found. -->
+    <div class="row span2 settings-section" id="models-section" hidden>
+      <h3 class="section-title">Local models</h3>
+      <div id="models-list"></div>
+      <p id="models-dir" class="hint"></p>
+    </div>
+    </div>
+    <div class="settings-tab" role="tabpanel" data-tab="display">
     <div class="row span2">
-      <label class="checkbox-row">
+      <label class="toggle-row">
         <input id="font-large" type="checkbox">
-        Large captions <span class="muted">— bigger fonts for distance viewing; default on for phones / tablets</span>
+        <span>
+          <span class="toggle-title">Large captions</span>
+          <span class="hint">For viewing from a distance.</span>
+        </span>
       </label>
     </div>
     <div class="row span2">
-      <label class="checkbox-row">
+      <label class="toggle-row">
         <input id="debug-mode" type="checkbox">
-        Debug mode <span class="muted">— show diagnostic badges and allow more source languages (may or may not work)</span>
+        <span>
+          <span class="toggle-title">Debug mode</span>
+          <span class="hint">Diagnostic badges and extra, less tested source languages.</span>
+        </span>
       </label>
+    </div>
+    </div>
     </div>
    </div>
   </div>
 
   <div id="history"></div>
+
+  <!-- Before anything is captioned: setup steps or a short how-to (app.js). -->
+  <div id="welcome" hidden>
+    <div class="welcome-card"></div>
+  </div>
 
   <div id="caption-stack">
     <div id="caption-prev" class="caption-zone prev" hidden>

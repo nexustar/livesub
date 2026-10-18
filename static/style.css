@@ -137,63 +137,126 @@ body.debug-mode #source-lang-select { display: none; }
 
 /* ───────── Settings panel (two-column grid) ───────── */
 
-/* Settings-open is a modal-ish view: panel grows to fill the
-   remaining viewport, caption-stack + history are hidden. The
-   `body.settings-open` class is toggled by JS alongside the panel's
-   `hidden` attribute.
-   The panel itself is a transparent centering container; the visible
-   bordered card is .settings-form inside it. `safe center` keeps the
-   form vertically centered when the viewport has slack, and falls
-   back to top-alignment when the form is taller than the panel
-   (avoids hiding fields above the scroll area). */
+/* Settings-open is a page-like view: the panel fills the remaining
+   viewport, caption-stack + history are hidden. The `body.settings-open`
+   class is toggled by JS alongside the panel's `hidden` attribute.
+   The visible card is .settings-form, top-aligned at a fixed readable
+   width. It never outgrows the panel: when the viewport is too short, the
+   tab bar stays put and the active tab scrolls inside the card. */
 #settings-panel {
   flex: 1 1 auto;
-  overflow-y: auto;
-  padding: 12px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  justify-content: safe center;
-}
-
-.settings-form {
-  border: 1px solid #2a2a2a;
-  border-radius: 8px;
-  background: #0f0f0f;
-  padding: 14px 16px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px 14px;
+  overflow: hidden;
+  padding: 20px 12px;
 }
 #settings-panel[hidden] { display: none; }
 body.settings-open #caption-stack,
 body.settings-open #history { display: none; }
 
+.settings-form {
+  width: 100%;
+  max-width: 680px;
+  min-height: 0;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #222;
+  border-radius: 10px;
+  background: #0f0f0f;
+  padding: 6px 20px 20px;
+}
+
+.settings-tabs {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #222;
+  margin-bottom: 18px;
+  overflow-x: auto;
+}
+.settings-tabs button {
+  background: transparent;
+  color: #888;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.settings-tabs button:hover { background: transparent; color: #ccc; }
+.settings-tabs button.active { color: #f0f0f0; border-bottom-color: #2563eb; }
+
+/* All tabs share one grid cell, so the card keeps the tallest tab's height
+   and doesn't resize when switching tabs. Inactive tabs are
+   visibility:hidden, which also takes them out of focus and clicks.
+   When the card is squeezed, the 1fr row takes the space left and each tab
+   scrolls on its own, so a short tab has nothing to scroll. */
+.settings-tab-body {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.settings-tab {
+  grid-area: 1 / 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 16px;
+  align-content: start;
+}
+.settings-tab:not(.active) { visibility: hidden; }
+
 #settings-panel .row {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 6px;
   min-width: 0;
 }
 #settings-panel .row.span2 { grid-column: 1 / -1; }
+/* The display rules above (and button's inline-flex) would otherwise beat
+   the hidden attribute. */
+#settings-panel [hidden] { display: none; }
 
 #settings-panel label {
-  color: #aaa;
+  color: #ddd;
+  font-size: 13px;
+  font-weight: 500;
+}
+#settings-panel .optional {
+  margin-left: 4px;
+  color: #666;
+  font-size: 11px;
+  font-weight: normal;
+}
+#settings-panel .hint {
+  margin: 0;
+  color: #777;
   font-size: 12px;
+  font-weight: normal;
+  line-height: 1.45;
 }
 #settings-panel .muted { color: #666; font-weight: normal; }
 
 #settings-panel input,
 #settings-panel textarea,
 #settings-panel select {
-  background: #1a1a1a;
+  background: #161616;
   color: #f0f0f0;
   border: 1px solid #2a2a2a;
-  border-radius: 4px;
-  padding: 5px 8px;
+  border-radius: 6px;
+  padding: 7px 10px;
   font-family: inherit;
   font-size: 13px;
+  line-height: 1.4;
   resize: vertical;
 }
+#settings-panel input::placeholder,
+#settings-panel textarea::placeholder { color: #555; }
 /* Native <select> rendering adds extra vertical padding for the dropdown
    arrow chrome, making it visibly taller than sibling <input>s even with
    matching padding. Strip the native widget and draw our own chevron so all
@@ -204,8 +267,8 @@ body.settings-open #history { display: none; }
   -webkit-appearance: none;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
   background-repeat: no-repeat;
-  background-position: right 8px center;
-  padding-right: 24px;
+  background-position: right 10px center;
+  padding-right: 28px;
 }
 #settings-panel input:focus,
 #settings-panel textarea:focus,
@@ -232,26 +295,165 @@ body.settings-open #history { display: none; }
 .hint-scene-row button {
   white-space: nowrap;
   font-size: 12px;
-  padding: 4px 10px;
+  padding: 4px 12px;
 }
 
-#hint-status {
-  font-size: 11px;
-  min-height: 1.2em;
-}
+#hint-status { font-size: 12px; }
+#hint-status:empty { display: none; }
 #hint-status.ok { color: #16a34a; }
 #hint-status.err { color: #ef4444; }
 #hint-status.busy { color: #fbbf24; }
 
-.checkbox-row {
+#settings-panel .asr-model-hint {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
+  color: #fbbf24;
+}
+#settings-panel .asr-model-hint.err { color: #ef4444; }
+#settings-panel .asr-model-hint[hidden] { display: none; }
+.asr-model-hint button {
   font-size: 12px;
-  color: #ddd;
+  padding: 3px 10px;
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.slider-end {
+  color: #666;
+  font-size: 11px;
+  white-space: nowrap;
+}
+/* Thin dark track instead of the native bright one, which stood out against
+   the dark cards. One color: it's a trade-off between two ends, not an amount. */
+#settings-panel input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  min-width: 0;
+  height: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: #333;
   cursor: pointer;
 }
-.checkbox-row input[type="checkbox"] { cursor: pointer; }
+#settings-panel input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #e5e5e5;
+  box-shadow: 0 0 0 3px #141414;
+}
+#settings-panel input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: #e5e5e5;
+  box-shadow: 0 0 0 3px #141414;
+}
+#settings-panel input[type="range"]:disabled { opacity: 0.5; }
+
+/* A titled group inside a tab, divided from the fields above it. */
+#settings-panel .settings-section {
+  margin-top: 6px;
+  padding-top: 18px;
+  border-top: 1px solid #222;
+}
+#settings-panel .section-title {
+  margin: 0;
+  color: #ddd;
+  font-size: 13px;
+  font-weight: 600;
+}
+.model-chunk {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+}
+.slider-value {
+  min-width: 3.2em;
+  color: #ddd;
+  font-size: 12px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+#models-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.model-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "name   btn"
+    "status btn"
+    "bar    bar";
+  align-items: center;
+  gap: 2px 12px;
+  padding: 10px 12px;
+  border: 1px solid #222;
+  border-radius: 8px;
+  background: #141414;
+}
+.model-name { grid-area: name; color: #eee; font-size: 13px; font-weight: 500; }
+.model-status {
+  grid-area: status;
+  color: #777;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+#settings-panel .model-status.err { color: #ef4444; }
+.model-item button {
+  grid-area: btn;
+  font-size: 12px;
+  padding: 5px 12px;
+}
+.model-bar {
+  grid-area: bar;
+  margin-top: 8px;
+  height: 4px;
+  border-radius: 2px;
+  background: #222;
+  overflow: hidden;
+}
+.model-bar > div {
+  height: 100%;
+  width: 0;
+  background: #2563eb;
+  transition: width 0.3s;
+}
+#models-dir {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #555;
+  overflow-wrap: anywhere;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+.toggle-row > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+#settings-panel .toggle-row input[type="checkbox"] {
+  margin: 2px 0 0;
+  width: 15px;
+  height: 15px;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+.toggle-title { color: #ddd; }
 
 /* ───────── Caption stack (current + prev) ───────── */
 
@@ -444,6 +646,85 @@ body.font-large .transcript { font-size: 16px; }
 body.font-large .caption-zone { padding: 18px 18px 20px; }
 body.font-large .history-item .dst { font-size: 16px; }
 
+/* ───────── Welcome card (idle, nothing captioned yet) ───────── */
+
+/* Takes the history + caption area until the first caption, so a new user
+   sees what to do (or what's missing) before pressing Start. */
+#welcome {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+}
+#welcome[hidden],
+body.settings-open #welcome { display: none; }
+body.welcome-shown #history,
+body.welcome-shown #caption-stack { display: none; }
+
+.welcome-card {
+  margin: auto;
+  width: 100%;
+  max-width: 560px;
+  border: 1px solid #222;
+  border-radius: 10px;
+  background: #0f0f0f;
+  padding: 20px 22px;
+  color: #ccc;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.welcome-card h2 {
+  margin: 0 0 10px;
+  color: #f0f0f0;
+  font-size: 17px;
+  font-weight: 600;
+}
+.welcome-card p { margin: 0 0 10px; }
+.welcome-card p:last-child { margin-bottom: 0; }
+.welcome-card ol,
+.welcome-card ul { margin: 0 0 12px; padding-left: 20px; }
+.welcome-card li { margin: 4px 0; }
+.welcome-card b { color: #eee; font-weight: 600; }
+.welcome-card code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  color: #ddd;
+  background: #1a1a1a;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.welcome-card .muted { color: #777; font-size: 13px; }
+.welcome-models {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.welcome-models + p { margin-top: 12px; }
+.welcome-card .model-bar[hidden] { display: none; }
+.welcome-card .model-status.err { color: #ef4444; }
+.welcome-card .tag {
+  margin-left: 8px;
+  color: #60a5fa;
+  font-size: 11px;
+  font-weight: normal;
+}
+.welcome-card .link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #60a5fa;
+  font-size: inherit;
+  display: inline;
+}
+.welcome-card .link:hover { background: none; text-decoration: underline; }
+
+@media (max-height: 350px) {
+  #welcome { display: none; }
+  body.welcome-shown #caption-stack { display: flex; }
+}
+
 /* ───────── History auto-hide when there's no room for ≥2 rows ───────── */
 
 /* Below these thresholds the rest of the layout (controls + caption stack)
@@ -476,14 +757,18 @@ body.font-large .history-item .dst { font-size: 16px; }
   .translation,
   body.font-large .translation { font-size: 20px; }
   #settings-panel { padding: 6px 8px; }
-  .settings-form { padding: 8px 10px; gap: 6px 10px; }
+  .settings-form { padding: 2px 10px 10px; }
+  .settings-tabs { margin-bottom: 8px; }
+  .settings-tab { gap: 8px 10px; }
 }
 
 /* ───────── Responsive: narrow width ───────── */
 
 @media (max-width: 600px) {
-  .settings-form { grid-template-columns: 1fr; }
-  .settings-form .row.span2 { grid-column: 1; }
+  #settings-panel { padding: 12px 8px; }
+  .settings-form { padding: 4px 14px 16px; }
+  .settings-tab { grid-template-columns: minmax(0, 1fr); }
+  .settings-tab .row.span2 { grid-column: 1; }
   #controls .badge { font-size: 10px; padding: 2px 5px; }
 }
 

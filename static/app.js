@@ -38,6 +38,9 @@ const LS_SCENE = "livesub.scene";
 const LS_GLOSSARY = "livesub.glossary";
 const LS_DEBUG = "livesub.debugMode";
 const LS_FONT_LARGE = "livesub.fontLarge";
+const LS_SETTINGS_TAB = "livesub.settingsTab";
+// Per local model, suffixed with its id (qwen-small / qwen-large).
+const LS_QWEN_CHUNK = "livesub.qwenChunkSec.";
 
 targetLangInput.value = localStorage.getItem(LS_LANG) || "Chinese (Simplified)";
 // Source-lang has two visible elements (see HTML): a <select> for normal
@@ -99,10 +102,12 @@ function populateBackendSelect(sel, items, savedValue) {
     // No backend configured for this kind on the server side. Show a clear
     // disabled placeholder so the user sees they need to set a key/binary,
     // instead of getting a mysterious WS-close error after pressing Start.
+    // Selected explicitly: a lone disabled option otherwise renders blank.
     const opt = document.createElement("option");
     opt.value = "";
     opt.textContent = "(none configured)";
     opt.disabled = true;
+    opt.selected = true;
     sel.appendChild(opt);
     sel.disabled = true;
     return;
@@ -111,11 +116,18 @@ function populateBackendSelect(sel, items, savedValue) {
   for (const it of items) {
     const opt = document.createElement("option");
     opt.value = it.id;
-    opt.textContent = it.label;
+    // Local models are listed before they're downloaded (ready: false);
+    // picking one offers the download under the select.
+    opt.textContent = it.ready === false ? `${it.label} — not downloaded` : it.label;
+    opt.dataset.ready = it.ready === false ? "0" : "1";
     sel.appendChild(opt);
   }
   if (savedValue && [...sel.options].some(o => o.value === savedValue)) {
     sel.value = savedValue;
+  } else {
+    // No saved choice: default to something that can run right away.
+    const usable = [...sel.options].find(o => o.dataset.ready === "1");
+    if (usable) sel.value = usable.value;
   }
 }
 
@@ -129,6 +141,7 @@ async function loadBackends() {
     return;
   }
   populateBackendSelect(asrBackendSel, data.asr || [], localStorage.getItem(LS_ASR));
+  updateAsrModelHint();
   // Migrate old single "claude" value (pre-variant split) → claude-haiku.
   let savedTr = localStorage.getItem(LS_TR);
   if (savedTr === "claude") savedTr = "claude-haiku";
@@ -139,8 +152,211 @@ async function loadBackends() {
     const row = document.getElementById("scene-seed-row");
     if (row) row.hidden = true;
   }
+  renderWelcome();
 }
 loadBackends();
+
+// Local models: one row per model with its state and a single action button.
+// Rows are built once and updated in place, so polling during a download
+// doesn't swap the button out from under a click.
+const modelsSection = document.getElementById("models-section");
+const modelsListEl = document.getElementById("models-list");
+const modelsDirEl = document.getElementById("models-dir");
+const modelEls = new Map();  // id -> {status, bar, fill, btn}
+const modelPrev = new Map();  // id -> {state, done, t} from the last poll
+const modelsById = new Map();  // id -> latest /api/models entry
+let localUnavailable = null;  // {kind, reason} when there's no local qwen_asr
+let modelsPollTimer = null;
+const asrModelHintEl = document.getElementById("asr-model-hint");
+const asrModelHintText = asrModelHintEl.querySelector("span");
+const asrModelHintBtn = asrModelHintEl.querySelector("button");
+
+const MODEL_MISSING_STATUS = "download the speech-to-text model first";
+
+function asrModelMissing() {
+  return asrBackendSel.selectedOptions[0]?.dataset.ready === "0";
+}
+
+// Under the ASR select: when the picked local model isn't downloaded, say so
+// and offer the download (with progress) right there.
+function updateAsrModelHint() {
+  // Backends loaded but none usable: the select only holds its placeholder.
+  if (asrBackendSel.options.length > 0 && !asrBackendSel.value) {
+    asrModelHintText.textContent = noBackendText();
+    asrModelHintBtn.hidden = true;
+    asrModelHintEl.classList.add("err");
+    asrModelHintEl.hidden = false;
+    return;
+  }
+  const m = modelsById.get(asrBackendSel.value);
+  if (!asrModelMissing() || !m) {
+    asrModelHintEl.hidden = true;
+    if (statusEl.textContent === MODEL_MISSING_STATUS) setStatus("idle");
+    return;
+  }
+  const pct = m.size ? Math.floor((m.done / m.size) * 100) : 0;
+  let text;
+  let btn = "";
+  if (m.state === "downloading") {
+    text = `Downloading ${pct}% of ${fmtBytes(m.size)}…`;
+  } else if (m.state === "ready") {
+    text = "Downloaded — loading…";  // the select is about to refresh
+  } else if (m.state === "error") {
+    text = `Download failed: ${m.error}`;
+    btn = "Retry";
+  } else {
+    text = m.done > 0 ? `Partly downloaded · ${pct}% of ${fmtBytes(m.size)}` : `Not downloaded yet · ${fmtBytes(m.size)}`;
+    btn = m.done > 0 ? "Resume" : "Download";
+  }
+  asrModelHintText.textContent = text;
+  asrModelHintBtn.textContent = btn;
+  asrModelHintBtn.hidden = !btn;
+  asrModelHintEl.classList.toggle("err", m.state === "error");
+  asrModelHintEl.hidden = false;
+}
+asrModelHintBtn.addEventListener("click", () => modelAction(asrBackendSel.value, "download"));
+
+function fmtBytes(n) {
+  return n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`;
+}
+
+async function modelAction(id, action) {
+  const res = action === "delete"
+    ? await fetch(`api/models/${id}`, { method: "DELETE" })
+    : await fetch(`api/models/${id}/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) alert(data.error || `HTTP ${res.status}`);
+  loadModels();
+}
+
+function modelEl(m) {
+  let el = modelEls.get(m.id);
+  if (el) return el;
+  const item = document.createElement("div");
+  item.className = "model-item";
+  const name = document.createElement("span");
+  name.className = "model-name";
+  name.textContent = m.label;
+  const status = document.createElement("span");
+  status.className = "model-status";
+  const btn = document.createElement("button");
+  btn.className = "secondary";
+  btn.type = "button";
+  btn.addEventListener("click", () => {
+    const action = btn.dataset.action;
+    if (action === "delete" && !confirm(`Delete ${m.label} (${fmtBytes(m.size)})?`)) return;
+    if (action) modelAction(m.id, action);
+  });
+  const bar = document.createElement("div");
+  bar.className = "model-bar";
+  const fill = document.createElement("div");
+  bar.appendChild(fill);
+  // Latency / CPU trade-off for this model: qwen-asr's --stream-chunk-sec.
+  // Smaller chunks show text sooner but re-run the model more often.
+  const chunk = document.createElement("div");
+  chunk.className = "slider-row model-chunk";
+  const chunkInput = document.createElement("input");
+  Object.assign(chunkInput, { type: "range", min: "1", max: "8", step: "0.5" });
+  chunkInput.value = qwenChunkSec(m.id);
+  chunkInput.setAttribute("aria-label", `${m.label}: latency vs. CPU`);
+  const chunkValue = document.createElement("span");
+  chunkValue.className = "slider-value";
+  const showChunk = () => { chunkValue.textContent = `${chunkInput.value} s`; };
+  chunkInput.addEventListener("input", () => {
+    localStorage.setItem(LS_QWEN_CHUNK + m.id, chunkInput.value);
+    showChunk();
+  });
+  showChunk();
+  const ends = ["Lower latency", "Lower CPU"].map((t) => {
+    const s = document.createElement("span");
+    s.className = "slider-end";
+    s.textContent = t;
+    return s;
+  });
+  chunk.append(ends[0], chunkInput, ends[1], chunkValue);
+  item.append(name, status, btn, bar, chunk);
+  modelsListEl.appendChild(item);
+  el = { status, bar, fill, btn, chunk };
+  modelEls.set(m.id, el);
+  return el;
+}
+
+async function loadModels() {
+  clearTimeout(modelsPollTimer);
+  let data;
+  try {
+    data = await (await fetch("api/models")).json();
+  } catch (e) {
+    console.error("failed to fetch /api/models", e);
+    return;
+  }
+  // The Local models section only exists when the qwen_asr binary was found.
+  modelsSection.hidden = !data.available;
+  localUnavailable = data.available ? null : { kind: data.unavailable_kind, reason: data.unavailable_reason || "" };
+  if (!data.available) {
+    updateAsrModelHint();  // its wording depends on localUnavailable
+    renderWelcome();
+    return;
+  }
+  for (const m of data.models) modelsById.set(m.id, m);
+  updateAsrModelHint();
+  modelsDirEl.textContent = `Downloads go to ${data.data_dir}`;
+  let busy = false;
+  let changed = false;
+  const now = performance.now();
+  for (const m of data.models) {
+    const el = modelEl(m);
+    const prev = modelPrev.get(m.id);
+    if (prev && prev.state !== m.state) changed = true;
+    const pct = m.size ? Math.floor((m.done / m.size) * 100) : 0;
+    let status = "";
+    let action = "";
+    switch (m.state) {
+      case "ready":
+        status = m.managed ? "Ready" : `Ready — from ${m.env}`;
+        action = m.managed ? "delete" : "";
+        break;
+      case "missing":
+        status = `${m.env} points to a missing directory: ${m.dir}`;
+        break;
+      case "downloading": {
+        busy = true;
+        status = `Downloading ${pct}% · ${fmtBytes(m.done)} / ${fmtBytes(m.size)}`;
+        if (prev && prev.state === "downloading" && now > prev.t) {
+          const rate = ((m.done - prev.done) / (now - prev.t)) * 1000;
+          if (rate > 0) status += ` · ${fmtBytes(rate)}/s`;
+        }
+        action = "cancel";
+        break;
+      }
+      case "error":
+        status = `Failed: ${m.error}`;
+        action = "download";
+        break;
+      default:
+        status = m.done > 0 ? `Paused at ${pct}%` : "Not downloaded";
+        action = "download";
+    }
+    el.status.textContent = m.state === "downloading" ? status : `${fmtBytes(m.size)} · ${status}`;
+    el.status.classList.toggle("err", m.state === "error" || m.state === "missing");
+    el.bar.hidden = !(m.state === "downloading" || (m.state === "absent" && m.done > 0));
+    el.fill.style.width = `${pct}%`;
+    el.btn.hidden = !action;
+    el.btn.dataset.action = action;
+    el.btn.textContent = { download: m.done > 0 ? "Resume" : "Download", cancel: "Cancel", delete: "Delete" }[action] || "";
+    el.chunk.hidden = m.state !== "ready";
+    modelPrev.set(m.id, { state: m.state, done: m.done, t: now });
+  }
+  // A model that finished (or was deleted) changes the ASR dropdown.
+  if (changed) loadBackends();
+  if (busy) modelsPollTimer = setTimeout(loadModels, 1000);
+  renderWelcome();
+}
+loadModels();
 
 sceneSeedInput.addEventListener("input", () => {
   localStorage.setItem(LS_SCENE_SEED, sceneSeedInput.value);
@@ -209,16 +425,26 @@ inputSourceSel.addEventListener("change", () => {
 });
 asrBackendSel.addEventListener("change", () => {
   localStorage.setItem(LS_ASR, asrBackendSel.value);
+  updateAsrModelHint();
+  renderWelcome();
 });
+
+function qwenChunkSec(modelId) {
+  return localStorage.getItem(LS_QWEN_CHUNK + modelId) || "2";
+}
+
 translateBackendSel.addEventListener("change", () => {
   localStorage.setItem(LS_TR, translateBackendSel.value);
+  renderWelcome();
 });
 
 targetLangInput.addEventListener("input", () => {
   localStorage.setItem(LS_LANG, targetLangInput.value);
+  renderWelcome();
 });
 sourceLangSel.addEventListener("change", () => {
   localStorage.setItem(LS_SRC, sourceLangSel.value);
+  renderWelcome();
   // Keep input synced so flipping into debug mode doesn't lose the choice.
   sourceLangInput.value = sourceLangSel.value;
 });
@@ -229,7 +455,29 @@ sourceLangInput.addEventListener("input", () => {
   if ([...sourceLangSel.options].some(o => o.value === sourceLangInput.value)) {
     sourceLangSel.value = sourceLangInput.value;
   }
+  renderWelcome();
 });
+
+// Settings tabs; the last one opened is remembered.
+const settingsTabBtns = [...document.querySelectorAll(".settings-tabs button")];
+const settingsTabs = [...document.querySelectorAll(".settings-tab")];
+function showSettingsTab(name) {
+  const btn = settingsTabBtns.find(b => b.dataset.tab === name && !b.hidden);
+  if (!btn) name = "session";
+  for (const b of settingsTabBtns) {
+    const on = b.dataset.tab === name;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  }
+  for (const t of settingsTabs) t.classList.toggle("active", t.dataset.tab === name);
+}
+for (const b of settingsTabBtns) {
+  b.addEventListener("click", () => {
+    showSettingsTab(b.dataset.tab);
+    localStorage.setItem(LS_SETTINGS_TAB, b.dataset.tab);
+  });
+}
+showSettingsTab(localStorage.getItem(LS_SETTINGS_TAB) || "session");
 
 settingsToggleBtn.addEventListener("click", () => {
   settingsPanel.hidden = !settingsPanel.hidden;
@@ -246,6 +494,7 @@ function lockSettings(locked) {
   inputSourceSel.disabled = locked;
   asrBackendSel.disabled = locked;
   translateBackendSel.disabled = locked;
+  for (const r of modelsListEl.querySelectorAll('input[type="range"]')) r.disabled = locked;
   hintGenerateBtn.disabled = locked;
 }
 
@@ -555,6 +804,13 @@ async function acquireStream(source) {
 }
 
 async function start() {
+  // Nothing to run (no backend at all, or the picked model isn't downloaded):
+  // point at the hint under the select instead of failing server-side.
+  if (!asrBackendSel.value || asrModelMissing()) {
+    setStatus(asrBackendSel.value ? MODEL_MISSING_STATUS : "no speech-to-text backend configured");
+    if (welcomeEl.hidden) openSettings("backends");
+    return;
+  }
   try {
     const inputSource = inputSourceSel.value || "mic";
     stream = await acquireStream(inputSource);
@@ -613,6 +869,7 @@ async function start() {
         glossary: glossaryInput.value.trim(),
         asr_backend: asrBackendSel.value || "gemini",
         translate_backend: translateBackendSel.value || "gemini",
+        qwen_chunk_sec: Number(qwenChunkSec(asrBackendSel.value)),
       }));
       // Tag <body> so CSS can hide the redundant transcript line in
       // passthrough mode (when we mirror src into the translation slot).
@@ -753,14 +1010,17 @@ async function start() {
     };
 
     ws.onerror = (e) => console.error("ws error", e);
-    ws.onclose = () => {
-      setStatus("disconnected");
-      if (recording) stop();
+    ws.onclose = async (e) => {
+      if (recording) await stop();
+      // A session the server refused carries its reason; stop() resets the
+      // status, so set it afterwards.
+      setStatus(e.reason ? `error: ${e.reason}` : "disconnected");
     };
 
     recording = true;
     setToggleState(true);
     lockSettings(true);
+    renderWelcome();
   } catch (err) {
     console.error(err);
     setStatus("error: " + err.message);
@@ -797,6 +1057,8 @@ async function stop() {
     stream = null;
   }
   if (ws) {
+    // Our own close: skip onclose, which reports server-side disconnects.
+    ws.onclose = null;
     try { ws.close(); } catch {}
     ws = null;
   }
@@ -835,6 +1097,7 @@ async function stop() {
   lastServerPeak = 0;
   badgeAsrEl.classList.remove("error", "active", "warn");
   updateBadges();
+  renderWelcome();
 }
 
 toggleBtn.addEventListener("click", () => {
@@ -853,4 +1116,178 @@ clearBtn.addEventListener("click", () => {
   prevCardEl.hidden = true;
   prevCardEl.classList.remove("entering");
   prevSlotSid = null;
+  renderWelcome();
 });
+
+// ---------- Welcome card ----------
+
+// Shown in the caption area while idle with nothing captioned yet: what's
+// missing before Start can work (no backend, or a model to download), or a
+// short how-to once everything is ready.
+const welcomeEl = document.getElementById("welcome");
+const welcomeCard = welcomeEl.querySelector(".welcome-card");
+let welcomeKey = "";  // what the card shows; it's rebuilt only when this changes
+let welcomeDl = null;  // id -> live parts of each model row, updated in place
+
+function h(tag, props, ...children) {
+  const e = document.createElement(tag);
+  Object.assign(e, props);
+  e.append(...children);
+  return e;
+}
+
+function openSettings(tab) {
+  if (settingsPanel.hidden) settingsToggleBtn.click();
+  showSettingsTab(tab);
+}
+
+function settingsLink(text, tab) {
+  const b = h("button", { type: "button", className: "link" }, text);
+  b.addEventListener("click", () => openSettings(tab));
+  return b;
+}
+
+function renderWelcome() {
+  const show = asrBackendSel.options.length > 0 && !recording &&
+    historyEl.children.length === 0 && sentences.size === 0;
+  welcomeEl.hidden = !show;
+  document.body.classList.toggle("welcome-shown", show);
+  if (!show) return;
+  if (!asrBackendSel.value) {
+    showWelcome(`none:${localUnavailable?.kind}:${localUnavailable?.reason}`, welcomeNoBackend);
+    return;
+  }
+  if (asrModelMissing() && modelsById.has(asrBackendSel.value)) {
+    showWelcome("download", welcomeDownload);
+    updateWelcomeDownload();
+    return;
+  }
+  // Keyed on what the summary shows, so edits in Settings refresh it.
+  const summary = welcomeSummary();
+  showWelcome(`ready:${summary.join("\n")}`, () => welcomeReady(summary));
+}
+
+function showWelcome(key, build) {
+  if (key === welcomeKey) return;
+  welcomeKey = key;
+  welcomeDl = null;
+  welcomeCard.replaceChildren(...build());
+}
+
+// No speech-to-text at all. With the qwen binary packaged, that's a platform
+// without one, or a QWEN_ASR_BIN in .env that points nowhere.
+function noBackendText() {
+  if (localUnavailable?.kind === "config") {
+    return "QWEN_ASR_BIN in .env points to a missing file. Fix or remove it, then restart livesub.";
+  }
+  return "Local speech-to-text isn't supported on this computer yet. Add a cloud API key " +
+    "(e.g. DASHSCOPE_API_KEY) to .env and restart livesub.";
+}
+
+function welcomeNoBackend() {
+  return [
+    h("h2", {}, "Speech-to-text isn't available"),
+    h("p", {}, noBackendText()),
+    localUnavailable?.reason ? h("p", { className: "muted" }, `Details: ${localUnavailable.reason}.`) : "",
+  ];
+}
+
+// The models a new user picks between on the download card.
+const WELCOME_MODELS = {
+  "qwen-small": { name: "Standard", note: "Fast, runs on most computers.", recommended: true },
+  "qwen-large": { name: "High accuracy", note: "More accurate, needs a fast computer." },
+};
+
+function welcomeDownload() {
+  welcomeDl = new Map();
+  const rows = [...modelsById.values()].filter((m) => m.managed && WELCOME_MODELS[m.id]).map((m) => {
+    const info = WELCOME_MODELS[m.id];
+    const name = h("span", { className: "model-name" }, info.name,
+      info.recommended ? h("span", { className: "tag" }, "recommended") : "");
+    const status = h("span", { className: "model-status" });
+    const btn = h("button", { type: "button" });
+    btn.addEventListener("click", () => welcomeModelAction(m.id, btn.dataset.action));
+    const fill = h("div");
+    const bar = h("div", { className: "model-bar" }, fill);
+    welcomeDl.set(m.id, { status, btn, bar, fill });
+    return h("div", { className: "model-item" }, name, status, btn, bar);
+  });
+  const missing = [...modelsById.values()].filter((m) => m.state === "missing")
+    .map((m) => h("p", { className: "muted" }, `${m.env} in .env points to a missing directory: ${m.dir}`));
+  return [
+    h("h2", {}, "Download a speech model"),
+    h("p", {}, rows.length > 1 ? "Runs offline on this computer. Pick one:" : "Runs offline on this computer."),
+    h("div", { className: "welcome-models" }, ...rows),
+    ...missing,
+  ];
+}
+
+// Downloading or using a model also makes it the speech-to-text backend.
+function welcomeModelAction(id, action) {
+  if (!action) return;
+  if (action !== "cancel" && asrBackendSel.value !== id) {
+    asrBackendSel.value = id;
+    localStorage.setItem(LS_ASR, id);
+    updateAsrModelHint();
+  }
+  if (action === "use") renderWelcome();
+  else modelAction(id, action);
+}
+
+function updateWelcomeDownload() {
+  if (!welcomeDl) return;
+  for (const [id, el] of welcomeDl) {
+    const m = modelsById.get(id);
+    const info = WELCOME_MODELS[id];
+    const pct = m.size ? Math.floor((m.done / m.size) * 100) : 0;
+    let status = `${fmtBytes(m.size)} · ${info.note}`;
+    let action = "download";
+    let label = "Download";
+    if (m.state === "downloading") {
+      status = `Downloading ${pct}% · ${fmtBytes(m.done)} / ${fmtBytes(m.size)}`;
+      action = "cancel";
+      label = "Cancel";
+    } else if (m.state === "error") {
+      status = `Failed: ${m.error}`;
+      label = "Retry";
+    } else if (m.state === "ready") {
+      status = `${fmtBytes(m.size)} · Downloaded`;
+      action = "use";
+      label = "Use";
+    } else if (m.done > 0) {
+      status = `Paused at ${pct}% · ${fmtBytes(m.size)}`;
+      label = "Resume";
+    }
+    el.status.textContent = status;
+    el.status.classList.toggle("err", m.state === "error");
+    el.bar.hidden = m.done === 0 || m.state === "ready";
+    el.fill.style.width = `${pct}%`;
+    el.btn.dataset.action = action;
+    el.btn.textContent = label;
+    el.btn.className = info.recommended && action !== "cancel" ? "" : "secondary";
+  }
+}
+
+// Two lines: the speech-to-text backend, then translation and languages.
+function welcomeSummary() {
+  const asr = asrBackendSel.selectedOptions[0]?.textContent || "";
+  const tr = translateBackendSel.selectedOptions[0]?.textContent || "";
+  if (translateBackendSel.value === "none") return [`Speech-to-text: ${asr}`, "Translation: off"];
+  const src = currentSourceLang();
+  const tgt = (targetLangInput.value || "Chinese (Simplified)").trim();
+  return [`Speech-to-text: ${asr}`, `Translation: ${tr} · ${src === "auto" ? "Auto-detect" : src} → ${tgt}`];
+}
+
+function welcomeReady(summary) {
+  return [
+    h("h2", {}, "Ready to caption"),
+    h("ol", {},
+      h("li", {}, "Pick ", h("b", {}, "🎤 Mic"), ", or ", h("b", {}, "📺 Tab"),
+        " for a browser tab (turn on “Share tab audio”)."),
+      h("li", {}, "Press ", h("b", {}, "Start"), "."),
+    ),
+    translateBackendSel.value === "none" ? "" : h("p", {}, "For better translations, add the topic and key names in ",
+      settingsLink("Settings → Session", "session"), "."),
+    h("p", { className: "muted" }, summary[0], h("br"), summary[1]),
+  ];
+}

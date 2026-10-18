@@ -49,7 +49,9 @@ import {
   VOXTRAL_MODEL_DIR,
   anthropicThinkingOff,
   getTranslateBackend,
-  qwenModelDirFor,
+  qwenModel,
+  qwenModelDir,
+  qwenModelReady,
   resolveBin,
   resolveRel,
   which,
@@ -186,6 +188,8 @@ export interface PipelineOpts {
   glossary: string;
   asrBackend: string;
   translateBackend: string;
+  // qwen-asr --stream-chunk-sec: lower = lower latency, more CPU.
+  qwenChunkSec: number;
 }
 
 export class Pipeline {
@@ -197,6 +201,7 @@ export class Pipeline {
   private readonly glossary: string;
   private readonly asrBackend: string;
   private readonly translateBackend: string;
+  private readonly qwenChunkSec: number;
 
   private claude: Anthropic | null = null;
   private openaiClient: OpenAI | null = null;
@@ -241,6 +246,7 @@ export class Pipeline {
     this.glossary = opts.glossary;
     this.asrBackend = opts.asrBackend;
     this.translateBackend = opts.translateBackend;
+    this.qwenChunkSec = opts.qwenChunkSec;
   }
 
   // ----- audio ingest, wired to the client websocket in server.ts -----
@@ -328,26 +334,22 @@ export class Pipeline {
         type: "error",
         message:
           `qwen_asr binary not found (looked for ${JSON.stringify(QWEN_BIN)}). ` +
-          "Build from https://github.com/antirez/qwen-asr and set QWEN_ASR_BIN env var.",
+          "Build from https://github.com/nexustar/qwen-asr and set QWEN_ASR_BIN env var.",
       });
       return;
     }
-    const modelDir = resolveRel(qwenModelDirFor(this.asrBackend));
-    const envName = this.asrBackend === "qwen-large" ? "QWEN_ASR_MODEL_DIR_LARGE" : "QWEN_ASR_MODEL_DIR_SMALL";
-    if (!modelDir || !pathExists(modelDir)) {
+    const model = qwenModel(this.asrBackend);
+    const modelDir = model ? qwenModelDir(model) : "";
+    if (!model || !qwenModelReady(model)) {
       await this.safeSendJson({
         type: "error",
-        message:
-          `qwen-asr model dir not found for ${this.asrBackend} ` +
-          `(checked ${JSON.stringify(modelDir)}). Run ./download_model.sh in ` +
-          `the qwen-asr repo and set ${envName} env var.`,
+        message: model?.envDir
+          ? `qwen-asr model dir not found (${model.envName}=${JSON.stringify(modelDir)}).`
+          : `qwen-asr model for ${this.asrBackend} is not downloaded — download it in Settings → Backends.`,
       });
       return;
     }
 
-    // 4s beats the binary's 2s default for latency on mainstream hardware for
-    // the 1.7B; 0.6B is fine on 2s, so don't override.
-    const chunkSec = this.asrBackend === "qwen-large" ? "4" : "";
     const qwenCmd: string[] = [
       binPath,
       "-d",
@@ -367,7 +369,9 @@ export class Pipeline {
     // No glossary --prompt: Qwen3-ASR (0.6B and 1.7B) copies the term list
     // into the transcript, whole lists at a time. The glossary goes to the
     // translator instead.
-    if (chunkSec) qwenCmd.push("--stream-chunk-sec", chunkSec);
+    // Chunk size is the user's latency / CPU trade-off (Settings slider). Too
+    // small for the machine and processing falls behind, so latency grows.
+    qwenCmd.push("--stream-chunk-sec", String(this.qwenChunkSec));
     // Committed text and the provisional tail, one JSON object per line.
     qwenCmd.push("--stream-json");
 

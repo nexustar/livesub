@@ -48,5 +48,8 @@
     "@types/ws": "^8.5.13",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
+  },
+  "optionalDependencies": {
+    "qwen-asr": "^0.2.0-alpha.2"
   }
 }

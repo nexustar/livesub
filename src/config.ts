@@ -5,7 +5,9 @@
 // ROOT and PKG_DIR below.
 
 import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { createRequire } from "node:module";
+import { homedir } from "node:os";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadDotenv } from "dotenv";
 import { parse as parseToml } from "smol-toml";
@@ -206,8 +208,48 @@ export const AUDIO_GATE_PEAK = 200;
 // Pre-buffer length (in 40ms chunks) replayed on silent->speech transition.
 export const AUDIO_PREBUFFER_CHUNKS = 12;
 
-// qwen-asr — local C inference subprocess.
-export const QWEN_BIN = env("QWEN_ASR_BIN", "qwen_asr");
+// Data dir for livesub-managed files (downloaded models), at the platform's
+// conventional location. Overridable via LIVESUB_DATA_DIR.
+function defaultDataDir(): string {
+  const home = homedir();
+  if (process.platform === "darwin") return join(home, "Library", "Application Support", "livesub");
+  if (process.platform === "win32") return join(process.env.LOCALAPPDATA || join(home, "AppData", "Local"), "livesub");
+  const xdg = process.env.XDG_DATA_HOME;
+  return join(xdg && isAbsolute(xdg) ? xdg : join(home, ".local", "share"), "livesub");
+}
+export const DATA_DIR = process.env.LIVESUB_DATA_DIR ? resolveRel(process.env.LIVESUB_DATA_DIR) : defaultDataDir();
+
+// Hugging Face endpoint for model downloads; point at a mirror (e.g.
+// https://hf-mirror.com) where huggingface.co is slow or blocked.
+export const HF_ENDPOINT = env("HF_ENDPOINT", "https://huggingface.co").replace(/\/+$/, "");
+
+// Prebuilt qwen_asr from the qwen-asr npm package (an optional dependency:
+// npm skips it where it has no binary, e.g. Windows). On failure, bin is ""
+// and reason says why, for the UI.
+function packagedQwenBin(): { bin: string; reason: string } {
+  try {
+    const { binaryPath } = createRequire(import.meta.url)("qwen-asr") as { binaryPath(): string };
+    return { bin: binaryPath(), reason: "" };
+  } catch (e) {
+    if ((e as { code?: string }).code === "MODULE_NOT_FOUND") {
+      return { bin: "", reason: `no prebuilt qwen-asr for ${process.platform}-${process.arch}` };
+    }
+    return { bin: "", reason: e instanceof Error ? e.message : String(e) };
+  }
+}
+const QWEN_PACKAGED = packagedQwenBin();
+
+// qwen-asr --stream-chunk-sec range accepted by the binary, and our default.
+export const QWEN_CHUNK_SEC_MIN = 1;
+export const QWEN_CHUNK_SEC_MAX = 8;
+export const QWEN_CHUNK_SEC_DEFAULT = 2;
+
+// qwen-asr — local C inference subprocess. QWEN_ASR_BIN wins, then the
+// packaged binary, then qwen_asr on PATH.
+export const QWEN_BIN = env("QWEN_ASR_BIN") || QWEN_PACKAGED.bin || "qwen_asr";
+// Why the packaged binary can't be used, when it can't (shown when no qwen_asr
+// is found at all).
+export const QWEN_PACKAGED_REASON = QWEN_PACKAGED.reason;
 
 // voxtral.c — local C inference of Mistral Voxtral Realtime 4B.
 export const VOXTRAL_BIN = env("VOXTRAL_BIN", "voxtral");
@@ -215,8 +257,63 @@ export const VOXTRAL_MODEL_DIR = env("VOXTRAL_MODEL_DIR", "voxtral-realtime-4b")
 export const VOXTRAL_INTERVAL_SEC = envFloat("VOXTRAL_INTERVAL_SEC", "2.0");
 
 // Two qwen3-asr variants ship in the same binary; only the model dir differs.
-export const QWEN_MODEL_DIR_SMALL = env("QWEN_ASR_MODEL_DIR_SMALL", "");
-export const QWEN_MODEL_DIR_LARGE = env("QWEN_ASR_MODEL_DIR_LARGE", "");
+// Each is either external (its env var names a dir the user manages) or
+// managed (livesub downloads it into DATA_DIR/models/). Revisions are pinned
+// so the sizes and checksums below stay valid; sha256 is only published for
+// the LFS weight files, the small files are checked by size.
+export interface QwenModelFile {
+  name: string;
+  size: number;
+  sha256?: string;
+}
+export interface QwenModel {
+  id: "qwen-small" | "qwen-large";
+  label: string;
+  repo: string;
+  revision: string;
+  dirName: string;
+  envName: string;
+  envDir: string;
+  files: QwenModelFile[];
+}
+const QWEN_TOKENIZER_FILES: QwenModelFile[] = [
+  { name: "vocab.json", size: 2776833 },
+  { name: "merges.txt", size: 1671853 },
+];
+export const QWEN_MODELS: QwenModel[] = [
+  {
+    id: "qwen-small",
+    label: "Qwen3-ASR 0.6B",
+    repo: "Qwen/Qwen3-ASR-0.6B",
+    revision: "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+    dirName: "qwen3-asr-0.6b",
+    envName: "QWEN_ASR_MODEL_DIR_SMALL",
+    envDir: env("QWEN_ASR_MODEL_DIR_SMALL", ""),
+    files: [
+      { name: "config.json", size: 6193 },
+      { name: "generation_config.json", size: 142 },
+      ...QWEN_TOKENIZER_FILES,
+      { name: "model.safetensors", size: 1876091704, sha256: "79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea" },
+    ],
+  },
+  {
+    id: "qwen-large",
+    label: "Qwen3-ASR 1.7B",
+    repo: "Qwen/Qwen3-ASR-1.7B",
+    revision: "7278e1e70fe206f11671096ffdd38061171dd6e5",
+    dirName: "qwen3-asr-1.7b",
+    envName: "QWEN_ASR_MODEL_DIR_LARGE",
+    envDir: env("QWEN_ASR_MODEL_DIR_LARGE", ""),
+    files: [
+      { name: "config.json", size: 6194 },
+      { name: "generation_config.json", size: 142 },
+      ...QWEN_TOKENIZER_FILES,
+      { name: "model.safetensors.index.json", size: 64821 },
+      { name: "model-00001-of-00002.safetensors", size: 4220320824, sha256: "a4cd1f1a04d90b757dc7f7dd26254e69a013b19e80efe590a83c6a3bde8608d6" },
+      { name: "model-00002-of-00002.safetensors", size: 478200688, sha256: "6e0b9d9e09e2e0238e7ef3cc8a484ab387e91b90f1900bedf88bc92d7929ccfc" },
+    ],
+  },
+];
 
 // Frontend assets ship with the package (next to the code). Overridable via
 // LIVESUB_STATIC_DIR.
@@ -253,14 +350,21 @@ function isFile(p: string): boolean {
 // blocked the event loop on every /api/backends request). A bare name is
 // searched on PATH; a path-like value is resolved (abs, or ROOT-relative) and
 // checked directly.
+function isPathLike(bin: string): boolean {
+  return bin.includes("/") || (process.platform === "win32" && bin.includes("\\"));
+}
+
 export function which(bin: string): string | null {
-  if (bin.includes("/")) {
+  if (isPathLike(bin)) {
     const abs = resolveRel(bin);
     return isExecFile(abs) ? abs : null;
   }
-  for (const dir of (process.env.PATH ?? "").split(":")) {
+  const names = process.platform === "win32" && !bin.toLowerCase().endsWith(".exe") ? [bin, `${bin}.exe`] : [bin];
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     if (!dir) continue;
-    if (isExecFile(join(dir, bin))) return join(dir, bin);
+    for (const name of names) {
+      if (isExecFile(join(dir, name))) return join(dir, name);
+    }
   }
   return null;
 }
@@ -269,7 +373,7 @@ export function which(bin: string): string | null {
 export function resolveBin(bin: string): string {
   const w = which(bin);
   if (w) return w;
-  if (bin.includes("/") && !isAbsolute(bin)) return join(ROOT, bin);
+  if (isPathLike(bin) && !isAbsolute(bin)) return join(ROOT, bin);
   return bin;
 }
 
@@ -281,10 +385,40 @@ export function localAsrAvailable(binPath: string, modelDir: string): boolean {
   return binOk && existsSync(resolveRel(modelDir));
 }
 
-// Map qwen-small/qwen-large backend id -> the configured model dir.
-export function qwenModelDirFor(backendId: string): string {
-  if (backendId === "qwen-large") return QWEN_MODEL_DIR_LARGE;
-  return QWEN_MODEL_DIR_SMALL;
+export function qwenModel(backendId: string): QwenModel | null {
+  return QWEN_MODELS.find((m) => m.id === backendId) ?? null;
+}
+
+// Absolute model dir: the env-configured dir when set, else the managed one.
+export function qwenModelDir(m: QwenModel): string {
+  return m.envDir ? resolveRel(m.envDir) : join(DATA_DIR, "models", m.dirName);
+}
+
+export function qwenBinAvailable(): boolean {
+  return which(QWEN_BIN) !== null || isFile(resolveRel(QWEN_BIN));
+}
+
+// Why there's no usable qwen_asr (null when there is one): a QWEN_ASR_BIN
+// that points nowhere ("config"), or no binary for this machine ("platform").
+export function qwenUnavailable(): { kind: "config" | "platform"; reason: string } | null {
+  if (qwenBinAvailable()) return null;
+  if (process.env.QWEN_ASR_BIN) return { kind: "config", reason: `QWEN_ASR_BIN not found: ${process.env.QWEN_ASR_BIN}` };
+  return { kind: "platform", reason: QWEN_PACKAGED_REASON || "qwen_asr not found" };
+}
+
+// An external dir is trusted as long as it exists; a managed one must hold
+// every file at its full size (downloads land as .part and are renamed only
+// once verified, so this also excludes one in progress).
+export function qwenModelReady(m: QwenModel): boolean {
+  const dir = qwenModelDir(m);
+  if (m.envDir) return existsSync(dir);
+  return m.files.every((f) => {
+    try {
+      return statSync(join(dir, f.name)).size === f.size;
+    } catch {
+      return false;
+    }
+  });
 }
 
 // Translate dropdown contents — registry filtered by env availability.
@@ -296,15 +430,21 @@ export function listTranslateBackends(): Array<{ id: string; label: string }> {
 
 // ASR dropdown contents — cloud gated by API key, local gated by binary + model
 // dir presence. Local backends listed first so they're the default on a fresh
-// install when both local and cloud are available.
-export function listAsrBackends(): Array<{ id: string; label: string }> {
-  const out: Array<{ id: string; label: string }> = [];
-  if (localAsrAvailable(QWEN_BIN, QWEN_MODEL_DIR_SMALL)) out.push({ id: "qwen-small", label: "Qwen (small, local)" });
-  if (localAsrAvailable(QWEN_BIN, QWEN_MODEL_DIR_LARGE)) out.push({ id: "qwen-large", label: "Qwen (large, local)" });
-  if (localAsrAvailable(VOXTRAL_BIN, VOXTRAL_MODEL_DIR)) out.push({ id: "voxtral", label: "Voxtral (local)" });
-  if (DASHSCOPE_API_KEY) out.push({ id: "qwen-cloud", label: "Qwen ASR (Cloud)" });
-  if (OPENAI_API_KEY) out.push({ id: "openai-realtime", label: "OpenAI Realtime" });
-  if (process.env.GEMINI_API_KEY) out.push({ id: "gemini", label: "Gemini Live" });
+// install when both local and cloud are available. With the qwen binary found,
+// a managed model is listed even before it's downloaded (ready: false) so the
+// UI can offer the download; only ready entries can run a session.
+export function listAsrBackends(): Array<{ id: string; label: string; ready: boolean }> {
+  const out: Array<{ id: string; label: string; ready: boolean }> = [];
+  if (qwenBinAvailable()) {
+    for (const m of QWEN_MODELS) {
+      const ready = qwenModelReady(m);
+      if (ready || !m.envDir) out.push({ id: m.id, label: m.id === "qwen-large" ? "Qwen (large, local)" : "Qwen (small, local)", ready });
+    }
+  }
+  if (localAsrAvailable(VOXTRAL_BIN, VOXTRAL_MODEL_DIR)) out.push({ id: "voxtral", label: "Voxtral (local)", ready: true });
+  if (DASHSCOPE_API_KEY) out.push({ id: "qwen-cloud", label: "Qwen ASR (Cloud)", ready: true });
+  if (OPENAI_API_KEY) out.push({ id: "openai-realtime", label: "OpenAI Realtime", ready: true });
+  if (process.env.GEMINI_API_KEY) out.push({ id: "gemini", label: "Gemini Live", ready: true });
   return out;
 }
 

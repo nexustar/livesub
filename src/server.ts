@@ -9,14 +9,21 @@ import { WebSocketServer, WebSocket, type RawData } from "ws";
 import { GoogleGenAI } from "@google/genai";
 
 import {
+  DATA_DIR,
   DEFAULT_TARGET_LANG,
   GEMINI_API_KEY,
+  QWEN_CHUNK_SEC_DEFAULT,
+  QWEN_CHUNK_SEC_MAX,
+  QWEN_CHUNK_SEC_MIN,
   STATIC_DIR,
   listAsrBackends,
   listTranslateBackends,
   pickHintsBackend,
+  qwenBinAvailable,
+  qwenUnavailable,
 } from "./config.js";
 import { generateHintsClaude, generateHintsGemini } from "./hints.js";
+import { cancelDownload, deleteModel, listModels, startDownload } from "./models.js";
 import { Pipeline } from "./pipeline.js";
 import { log } from "./util.js";
 
@@ -133,6 +140,33 @@ async function handleHints(req: IncomingMessage, res: ServerResponse): Promise<v
   }
 }
 
+// ---------- /api/models ----------
+
+// POST /api/models/:id/download|cancel, DELETE /api/models/:id. POSTs must
+// carry a JSON content type: that forces a CORS preflight, so another site
+// open in the browser can't start a multi-GB download on this server.
+function handleModel(req: IncomingMessage, res: ServerResponse, id: string, action: string | undefined): void {
+  let err: string | null;
+  if (req.method === "DELETE" && !action) {
+    err = deleteModel(id);
+  } else if (req.method === "POST" && action) {
+    if (!(req.headers["content-type"] ?? "").startsWith("application/json")) {
+      sendJson(res, 415, { error: "expected application/json" });
+      return;
+    }
+    if (action === "download") err = startDownload(id);
+    else {
+      cancelDownload(id);
+      err = null;
+    }
+  } else {
+    res.writeHead(405).end("method not allowed");
+    return;
+  }
+  if (err) sendJson(res, 400, { error: err });
+  else sendJson(res, 200, listModels());
+}
+
 // ---------- HTTP request router ----------
 
 const httpServer = createServer((req, res) => {
@@ -150,6 +184,15 @@ const httpServer = createServer((req, res) => {
       // Whether /api/hints can serve a request (any usable hints backend).
       hints_available: pickHintsBackend() !== null,
     });
+    return;
+  }
+  if (req.method === "GET" && path === "/api/models") {
+    sendJson(res, 200, listModels());
+    return;
+  }
+  const modelRoute = /^\/api\/models\/([\w-]+)(?:\/(download|cancel))?$/.exec(path);
+  if (modelRoute) {
+    handleModel(req, res, modelRoute[1], modelRoute[2]);
     return;
   }
   if (req.method === "POST" && path === "/api/hints") {
@@ -240,8 +283,15 @@ function startSession(ws: WebSocket, firstData: Buffer, preConfigAudio: Buffer[]
 
   // Validate backend choices against the live availability list; fall back to
   // the first available (or fail closed for ASR when nothing is configured).
+  // A listed-but-not-downloaded model is refused outright rather than swapped
+  // for another backend behind the user's back.
   let asrBackend = String(cfg.asr_backend ?? "").trim().toLowerCase();
-  const asrAvailable = new Set(listAsrBackends().map((b) => b.id));
+  const asrList = listAsrBackends();
+  if (asrList.some((b) => b.id === asrBackend && !b.ready)) {
+    ws.close(1003, `${asrBackend} model is not downloaded yet`);
+    return null;
+  }
+  const asrAvailable = new Set(asrList.filter((b) => b.ready).map((b) => b.id));
   if (!asrAvailable.has(asrBackend)) asrBackend = asrAvailable.values().next().value ?? "";
   if (!asrBackend) {
     ws.close(1003, "no ASR backend available — set at least one API key or local binary");
@@ -260,7 +310,10 @@ function startSession(ws: WebSocket, firstData: Buffer, preConfigAudio: Buffer[]
     gemini = new GoogleGenAI({ apiKey: GEMINI_API_KEY, httpOptions: { apiVersion: "v1beta" } });
   }
 
-  const pipeline = new Pipeline({ clientWs: ws, gemini, targetLang, sourceLang, scene, glossary, asrBackend, translateBackend });
+  const chunk = Number(cfg.qwen_chunk_sec);
+  const qwenChunkSec = Number.isFinite(chunk) && chunk >= QWEN_CHUNK_SEC_MIN && chunk <= QWEN_CHUNK_SEC_MAX ? chunk : QWEN_CHUNK_SEC_DEFAULT;
+
+  const pipeline = new Pipeline({ clientWs: ws, gemini, targetLang, sourceLang, scene, glossary, asrBackend, translateBackend, qwenChunkSec });
 
   // Flush any audio that arrived before the pipeline existed, then run.
   for (const buf of preConfigAudio) pipeline.onAudio(buf);
@@ -291,16 +344,23 @@ function startSession(ws: WebSocket, firstData: Buffer, preConfigAudio: Buffer[]
 
 // ---------- startup ----------
 
-// Fail fast if no ASR backend is configured (mirrors the __main__ guard).
-const asrAvail = listAsrBackends();
+// Keep running with no ASR backend: a local model can still be downloaded from
+// Settings, which makes one available without a restart.
+const asrAvail = listAsrBackends().filter((b) => b.ready);
 if (asrAvail.length === 0) {
-  log.error(
-    "no ASR backend configured — set at least one of GEMINI_API_KEY / OPENAI_API_KEY / DASHSCOPE_API_KEY, " +
-      "or point QWEN_ASR_BIN+QWEN_ASR_MODEL_DIR_SMALL (or _LARGE) / VOXTRAL_BIN+VOXTRAL_MODEL_DIR at a local binary",
+  log.warning(
+    qwenBinAvailable()
+      ? "no ASR backend available yet — download a local model in Settings → Backends, " +
+          "or set one of DASHSCOPE_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY"
+      : "no ASR backend available — set one of DASHSCOPE_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY, " +
+          "or build qwen-asr and set QWEN_ASR_BIN, then restart",
   );
-  process.exit(1);
+} else {
+  log.info(`ASR backends available: ${asrAvail.map((b) => b.id).join(", ")}`);
 }
-log.info(`ASR backends available: ${asrAvail.map((b) => b.id).join(", ")}`);
+log.info(`data dir: ${DATA_DIR}`);
+const qwenMissing = qwenUnavailable();
+if (qwenMissing) log.info(`local qwen-asr unavailable: ${qwenMissing.reason}`);
 
 httpServer.listen(PORT, HOST, () => {
   log.info(`livesub (ts) listening on http://${HOST}:${PORT}`);

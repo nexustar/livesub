@@ -23,8 +23,8 @@ underlying pipeline supports.
 ## Setup
 
 **Prereqs:** Node 20+, npm, and a modern browser. Tested on macOS and
-Linux; Windows is untested (Path C likely works as-is; Path A/B need WSL
-for the local C builds).
+Linux; Windows is untested (Path C likely works as-is; Path A/B need WSL,
+as local speech-to-text has no Windows build yet).
 
 Three paths depending on what you want. Pick one and follow it top to
 bottom, then start the server.
@@ -35,20 +35,14 @@ Audio stays on your machine; only translated text leaves the network.
 Combines the best local speech-to-text (BGM-capable Qwen 0.6B) with the
 cheapest practical translation (DeepSeek).
 
-Install qwen-asr:
-
-```bash
-git clone https://github.com/nexustar/qwen-asr
-cd qwen-asr && make blas && ./download_model.sh --model small
-```
-
 `.env`:
 
 ```bash
-QWEN_ASR_BIN=/abs/path/to/qwen-asr/qwen_asr
-QWEN_ASR_MODEL_DIR_SMALL=/abs/path/to/qwen-asr/qwen3-asr-0.6b
 DEEPSEEK_API_KEY=sk-...                # or ANTHROPIC_API_KEY for Claude
 ```
+
+Then start the server and download the speech model from the page (see
+[Local models](#local-models)).
 
 ### 🏠 Path B: Fully offline
 
@@ -56,14 +50,8 @@ No cloud, no API keys. Translation requires a local LLM (Ollama or
 lm-studio) registered in `livesub.toml`; alternatively, skip translation
 by picking "None (transcript only)" in Settings.
 
-Install qwen-asr (same commands as Path A), then:
-
-`.env`:
-
-```bash
-QWEN_ASR_BIN=/abs/path/to/qwen-asr/qwen_asr
-QWEN_ASR_MODEL_DIR_SMALL=/abs/path/to/qwen-asr/qwen3-asr-0.6b
-```
+Nothing to put in `.env`: start the server and download the speech model
+from the page.
 
 For translation, see [Custom translate backends](#custom-translate-backends)
 below — `livesub.toml.example` ships with a ready-to-use Ollama snippet.
@@ -107,19 +95,9 @@ For Path A / B users on a powerful machine: Qwen3-ASR **1.7B** or
 **Voxtral 4B** are more accurate than the 0.6B default but much heavier
 on RAM/VRAM.
 
-Qwen 1.7B (same binary as the 0.6B, just a different model):
-
-```bash
-cd qwen-asr && ./download_model.sh --model large
-```
-
-```bash
-QWEN_ASR_BIN=/abs/path/to/qwen-asr/qwen_asr
-QWEN_ASR_MODEL_DIR_LARGE=/abs/path/to/qwen-asr/qwen3-asr-1.7b
-```
-
-Both `_SMALL` and `_LARGE` can be set at the same time — each shows up
-as its own option in the Settings → Speech-to-text dropdown.
+Qwen 1.7B uses the same binary as the 0.6B, just a different model:
+pick "Qwen (large, local)" in **Settings → Backends** and download it
+there.
 
 Voxtral install:
 
@@ -134,6 +112,34 @@ cd voxtral.c && make mps && ./download_model.sh   # mps on Apple Silicon
 VOXTRAL_BIN=/abs/path/to/voxtral.c/voxtral
 VOXTRAL_MODEL_DIR=/abs/path/to/voxtral.c/voxtral-realtime-4b
 ```
+
+## Local models
+
+Local speech-to-text runs [qwen-asr](https://github.com/nexustar/qwen-asr),
+whose prebuilt binary `npm install` brings in on macOS 13.3+ and on Linux
+(x86-64 with AVX2, or arm64 ARMv8.2; glibc 2.28+). Elsewhere, build it
+yourself and set `QWEN_ASR_BIN` to the binary.
+
+When the qwen_asr binary is found, Qwen3-ASR 0.6B (1.9 GB) and 1.7B
+(4.7 GB) are always listed under **Settings → Backends**; picking one
+that isn't downloaded yet offers the download right there. The
+**Local models** section below it lists both with download / cancel /
+delete. Downloads come from Hugging Face, resume after a cancel or
+restart, and are checked against the published size and sha256.
+
+They are stored in the platform data dir, overridable with
+`LIVESUB_DATA_DIR`:
+
+- macOS: `~/Library/Application Support/livesub`
+- Linux: `$XDG_DATA_HOME/livesub` (default `~/.local/share/livesub`)
+- Windows: `%LOCALAPPDATA%\livesub`
+
+Set `HF_ENDPOINT=https://hf-mirror.com` (or another mirror) where
+huggingface.co is slow or blocked.
+
+To use a model you already have instead, point
+`QWEN_ASR_MODEL_DIR_SMALL` / `QWEN_ASR_MODEL_DIR_LARGE` at its
+directory; livesub then uses it as-is and won't download or delete it.
 
 ## Custom translate backends
 
