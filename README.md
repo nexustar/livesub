@@ -1,7 +1,10 @@
 # livesub
 
-Real-time bilingual captions for livestreams, videos and calls, in your
-browser. Speech-to-text can run entirely on your computer with
+English | [简体中文](README.zh-CN.md)
+
+Real-time bilingual captions for livestreams, videos and calls. The
+captions show in a browser page; the audio comes from a browser tab or a
+microphone. Speech-to-text can run entirely on your computer with
 Qwen3-ASR, which holds up even over background music; translation is
 your choice of a cloud model, a local LLM, or none.
 
@@ -17,6 +20,8 @@ livesub
 Open <http://localhost:8000>, download the speech model when asked, pick
 **Mic** or **Tab** and press **Start**. **Pop out** moves the
 captions into a small always-on-top window you can place over the video.
+The interface follows your browser's language (English or Chinese); change
+it in **Settings → Display**.
 
 For translation, create a `.env` file with a key, e.g.
 `DEEPSEEK_API_KEY=sk-...`, and start livesub from the folder that holds

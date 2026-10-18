@@ -1,3 +1,5 @@
+import { t, tNodes, applyI18n, setUiLang, savedUiLang, UI_LANGS } from "./i18n.js";
+
 const toggleBtn = document.getElementById("toggle");
 const clearBtn = document.getElementById("clear");
 const statusEl = document.getElementById("status");
@@ -27,6 +29,22 @@ const badgeAsrEl = document.getElementById("badge-asr");
 const badgeTranslateEl = document.getElementById("badge-translate");
 const debugModeInput = document.getElementById("debug-mode");
 const fontLargeInput = document.getElementById("font-large");
+const uiLangSel = document.getElementById("ui-lang");
+// Status as an English key + vars, so a language switch can redo it.
+let statusMsg = ["idle"];
+
+// Interface language; switching re-renders in place (see refreshLanguage).
+for (const [code, name] of UI_LANGS) uiLangSel.append(new Option(name, code));
+uiLangSel.value = savedUiLang();
+if (!uiLangSel.value) uiLangSel.value = "auto";
+setUiLang(uiLangSel.value);
+// Code-written text (no data-i18n, which a language switch would reset).
+setToggleState(false);
+setStatus("idle");
+uiLangSel.addEventListener("change", () => {
+  setUiLang(uiLangSel.value);
+  refreshLanguage();
+});
 
 const LS_LANG = "livesub.targetLang";
 const LS_SRC = "livesub.sourceLang";
@@ -111,7 +129,7 @@ function populateBackendSelect(sel, items, savedValue) {
     // Selected explicitly: a lone disabled option otherwise renders blank.
     const opt = document.createElement("option");
     opt.value = "";
-    opt.textContent = "(none configured)";
+    opt.textContent = t("(none configured)");
     opt.disabled = true;
     opt.selected = true;
     sel.appendChild(opt);
@@ -124,7 +142,7 @@ function populateBackendSelect(sel, items, savedValue) {
     opt.value = it.id;
     // Local models are listed before they're downloaded (ready: false);
     // picking one offers the download under the select.
-    opt.textContent = it.ready === false ? `${it.label} — not downloaded` : it.label;
+    opt.textContent = it.ready === false ? t("{label} — not downloaded", { label: t(it.label) }) : t(it.label);
     opt.dataset.ready = it.ready === false ? "0" : "1";
     sel.appendChild(opt);
   }
@@ -197,22 +215,24 @@ function updateAsrModelHint() {
   const m = modelsById.get(asrBackendSel.value);
   if (!asrModelMissing() || !m) {
     asrModelHintEl.hidden = true;
-    if (statusEl.textContent === MODEL_MISSING_STATUS) setStatus("idle");
+    if (statusMsg[0] === MODEL_MISSING_STATUS) setStatus("idle");
     return;
   }
   const pct = m.size ? Math.floor((m.done / m.size) * 100) : 0;
   let text;
   let btn = "";
   if (m.state === "downloading") {
-    text = `Downloading ${pct}% of ${fmtBytes(m.size)}…`;
+    text = t("Downloading {pct}% of {size}…", { pct, size: fmtBytes(m.size) });
   } else if (m.state === "ready") {
-    text = "Downloaded — loading…";  // the select is about to refresh
+    text = t("Downloaded — loading…");  // the select is about to refresh
   } else if (m.state === "error") {
-    text = `Download failed: ${m.error}`;
-    btn = "Retry";
+    text = t("Download failed: {error}", { error: m.error });
+    btn = t("Retry");
   } else {
-    text = m.done > 0 ? `Partly downloaded · ${pct}% of ${fmtBytes(m.size)}` : `Not downloaded yet · ${fmtBytes(m.size)}`;
-    btn = m.done > 0 ? "Resume" : "Download";
+    text = m.done > 0
+      ? t("Partly downloaded · {pct}% of {size}", { pct, size: fmtBytes(m.size) })
+      : t("Not downloaded yet · {size}", { size: fmtBytes(m.size) });
+    btn = m.done > 0 ? t("Resume") : t("Download");
   }
   asrModelHintText.textContent = text;
   asrModelHintBtn.textContent = btn;
@@ -254,7 +274,7 @@ function modelEl(m) {
   btn.type = "button";
   btn.addEventListener("click", () => {
     const action = btn.dataset.action;
-    if (action === "delete" && !confirm(`Delete ${m.label} (${fmtBytes(m.size)})?`)) return;
+    if (action === "delete" && !confirm(t("Delete {label} ({size})?", { label: m.label, size: fmtBytes(m.size) }))) return;
     if (action) modelAction(m.id, action);
   });
   const bar = document.createElement("div");
@@ -268,7 +288,6 @@ function modelEl(m) {
   const chunkInput = document.createElement("input");
   Object.assign(chunkInput, { type: "range", min: "1", max: "8", step: "0.5" });
   chunkInput.value = qwenChunkSec(m.id);
-  chunkInput.setAttribute("aria-label", `${m.label}: latency vs. CPU`);
   const chunkValue = document.createElement("span");
   chunkValue.className = "slider-value";
   const showChunk = () => { chunkValue.textContent = `${chunkInput.value} s`; };
@@ -277,16 +296,17 @@ function modelEl(m) {
     showChunk();
   });
   showChunk();
-  const ends = ["Lower latency", "Lower CPU"].map((t) => {
+  const ends = ["Lower latency", "Lower CPU"].map((label) => {
     const s = document.createElement("span");
     s.className = "slider-end";
-    s.textContent = t;
+    s.dataset.i18n = label;
     return s;
   });
   chunk.append(ends[0], chunkInput, ends[1], chunkValue);
+  applyI18n(chunk);
   item.append(name, status, btn, bar, chunk);
   modelsListEl.appendChild(item);
-  el = { status, bar, fill, btn, chunk };
+  el = { status, bar, fill, btn, chunk, chunkInput };
   modelEls.set(m.id, el);
   return el;
 }
@@ -310,7 +330,7 @@ async function loadModels() {
   }
   for (const m of data.models) modelsById.set(m.id, m);
   updateAsrModelHint();
-  modelsDirEl.textContent = `Downloads go to ${data.data_dir}`;
+  modelsDirEl.textContent = t("Downloads go to {dir}", { dir: data.data_dir });
   let busy = false;
   let changed = false;
   const now = performance.now();
@@ -323,15 +343,15 @@ async function loadModels() {
     let action = "";
     switch (m.state) {
       case "ready":
-        status = m.managed ? "Ready" : `Ready — from ${m.env}`;
+        status = m.managed ? t("Ready") : t("Ready — from {env}", { env: m.env });
         action = m.managed ? "delete" : "";
         break;
       case "missing":
-        status = `${m.env} points to a missing directory: ${m.dir}`;
+        status = t("{env} points to a missing directory: {dir}", { env: m.env, dir: m.dir });
         break;
       case "downloading": {
         busy = true;
-        status = `Downloading ${pct}% · ${fmtBytes(m.done)} / ${fmtBytes(m.size)}`;
+        status = t("Downloading {pct}% · {done} / {size}", { pct, done: fmtBytes(m.done), size: fmtBytes(m.size) });
         if (prev && prev.state === "downloading" && now > prev.t) {
           const rate = ((m.done - prev.done) / (now - prev.t)) * 1000;
           if (rate > 0) status += ` · ${fmtBytes(rate)}/s`;
@@ -340,11 +360,11 @@ async function loadModels() {
         break;
       }
       case "error":
-        status = `Failed: ${m.error}`;
+        status = t("Failed: {error}", { error: m.error });
         action = "download";
         break;
       default:
-        status = m.done > 0 ? `Paused at ${pct}%` : "Not downloaded";
+        status = m.done > 0 ? t("Paused at {pct}%", { pct }) : t("Not downloaded");
         action = "download";
     }
     el.status.textContent = m.state === "downloading" ? status : `${fmtBytes(m.size)} · ${status}`;
@@ -353,8 +373,9 @@ async function loadModels() {
     el.fill.style.width = `${pct}%`;
     el.btn.hidden = !action;
     el.btn.dataset.action = action;
-    el.btn.textContent = { download: m.done > 0 ? "Resume" : "Download", cancel: "Cancel", delete: "Delete" }[action] || "";
+    el.btn.textContent = t({ download: m.done > 0 ? "Resume" : "Download", cancel: "Cancel", delete: "Delete" }[action] || "");
     el.chunk.hidden = m.state !== "ready";
+    el.chunkInput.setAttribute("aria-label", t("{label}: latency vs. CPU", { label: m.label }));
     modelPrev.set(m.id, { state: m.state, done: m.done, t: now });
   }
   // A model that finished (or was deleted) changes the ASR dropdown.
@@ -377,12 +398,12 @@ glossaryInput.addEventListener("input", () => {
 async function generateHintsFromScene() {
   const desc = sceneSeedInput.value.trim();
   if (!desc) {
-    hintStatusEl.textContent = "Type a scene seed first.";
+    hintStatusEl.textContent = t("Type a topic first.");
     hintStatusEl.className = "muted err";
     return;
   }
   hintGenerateBtn.disabled = true;
-  hintStatusEl.textContent = "Researching (may take 5–15s)…";
+  hintStatusEl.textContent = t("Researching (may take 5–15s)…");
   hintStatusEl.className = "muted busy";
   try {
     const res = await fetch("api/hints", {
@@ -406,18 +427,18 @@ async function generateHintsFromScene() {
     glossaryInput.value = glossary;
     localStorage.setItem(LS_SCENE, scene);
     localStorage.setItem(LS_GLOSSARY, glossary);
-    const tail = data.searches_used
-      ? ` (${data.searches_used} web search${data.searches_used === 1 ? "" : "es"})`
-      : "";
+    const n = data.searches_used;
+    const searches = !n ? "" : n === 1 ? t(" (1 web search)") : t(" ({n} web searches)", { n });
     const via = data.backend
-      ? ` via ${data.backend.charAt(0).toUpperCase() + data.backend.slice(1)}`
+      ? t(" via {backend}", { backend: data.backend.charAt(0).toUpperCase() + data.backend.slice(1) })
       : "";
-    hintStatusEl.textContent =
-      `Generated${via}: scene (${scene.length}ch) + glossary (${glossary.length}ch)${tail}. Edit below as needed.`;
+    hintStatusEl.textContent = t(
+      "Generated{via}: scene ({scene} chars) + glossary ({glossary} chars){searches}. Edit below as needed.",
+      { via, scene: scene.length, glossary: glossary.length, searches });
     hintStatusEl.className = "muted ok";
   } catch (e) {
     console.error(e);
-    hintStatusEl.textContent = "Failed: " + e.message;
+    hintStatusEl.textContent = t("Failed: {error}", { error: e.message });
     hintStatusEl.className = "muted err";
   } finally {
     hintGenerateBtn.disabled = false;
@@ -542,13 +563,14 @@ const sentences = new Map();
 // target one of these.
 let prevSlotSid = null;
 
-function setStatus(s) {
-  statusEl.textContent = s;
+function setStatus(msg, vars) {
+  statusMsg = [msg, vars];
+  statusEl.textContent = t(msg, vars);
 }
 
 function setToggleState(rec) {
   toggleBtn.querySelector(".icon").textContent = rec ? "■" : "▶";
-  toggleBtn.querySelector(".label").textContent = rec ? "Stop" : "Start";
+  toggleBtn.querySelector(".label").textContent = rec ? t("Stop") : t("Start");
   toggleBtn.classList.toggle("recording", rec);
 }
 
@@ -766,7 +788,7 @@ function applyPrevRevision(sid, text) {
 async function acquireStream(source) {
   if (source === "screen") {
     if (!navigator.mediaDevices.getDisplayMedia) {
-      throw new Error("getDisplayMedia not supported in this browser");
+      throw new Error(t("Tab capture isn't supported in this browser."));
     }
     setStatus("pick a tab/window with audio…");
     // Chrome requires video:true; many implementations refuse audio-only.
@@ -799,12 +821,10 @@ async function acquireStream(source) {
     if (audioTracks.length === 0) {
       captured.getTracks().forEach(t => t.stop());
       throw new Error(
-        "No audio track delivered. " +
+        t("No audio track delivered.") + " " +
         (navigator.userAgent.includes("Firefox") && navigator.userAgent.includes("Linux")
-          ? "Firefox on Linux Wayland does not implement audio capture via " +
-            "getDisplayMedia — try Chrome/Chromium, or route system audio " +
-            "through a PipeWire virtual mic and use Mic mode."
-          : "Pick a TAB (not 'Entire screen' or 'Window') and check 'Share tab audio'.")
+          ? t("Firefox on Linux Wayland can't capture tab audio. Try Chrome or Chromium, or route system audio through a PipeWire virtual mic and use Mic.")
+          : t("Pick a tab (not \u201cEntire screen\u201d or \u201cWindow\u201d) and turn on \u201cShare tab audio\u201d."))
       );
     }
     console.log("tab audio acquired:",
@@ -882,7 +902,7 @@ async function start() {
     connect();
   } catch (err) {
     console.error(err);
-    setStatus("error: " + err.message);
+    setStatus("error: {message}", { message: err.message });
     await stop();
   }
 }
@@ -1068,7 +1088,7 @@ function connect() {
         break;
       case "error":
         lastError = msg.message;
-        setStatus("error: " + msg.message);
+        setStatus("error: {message}", { message: msg.message });
         badgeAsrEl.classList.add("error");
         console.error("server error:", msg.message);
         break;
@@ -1091,7 +1111,8 @@ function connect() {
       await stop();
       // A session the server refused carries its reason; stop() resets the
       // status, so set it afterwards.
-      setStatus(reason ? `error: ${reason}` : "disconnected");
+      if (reason) setStatus("error: {message}", { message: reason });
+      else setStatus("disconnected");
       return;
     }
     const delay = RECONNECT_DELAYS_MS[Math.min(reconnectFailures, n - 1)];
@@ -1100,7 +1121,8 @@ function connect() {
     retireSentences();
     translationsPending = 0;
     updateBadges();
-    setStatus(`${reason ? `error: ${reason}; ` : "disconnected, "}retrying in ${delay / 1000}s…`);
+    if (reason) setStatus("error: {message}; retrying in {s}s…", { message: reason, s: delay / 1000 });
+    else setStatus("disconnected, retrying in {s}s…", { s: delay / 1000 });
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       if (recording) connect();
@@ -1258,7 +1280,7 @@ if ("documentPictureInPicture" in window) {
       await openPip();
     } catch (err) {
       console.error(err);
-      setStatus("error: " + err.message);
+      setStatus("error: {message}", { message: err.message });
     }
   });
   document.getElementById("pip-return").addEventListener("click", () => pipWindow?.close());
@@ -1323,21 +1345,21 @@ function showWelcome(key, build) {
 // without one, or a QWEN_ASR_BIN in .env that points nowhere.
 function noBackendText() {
   if (localUnavailable?.kind === "config") {
-    return "QWEN_ASR_BIN in .env points to a missing file. Fix or remove it, then restart livesub.";
+    return t("QWEN_ASR_BIN in .env points to a missing file. Fix or remove it, then restart livesub.");
   }
-  return "Local speech-to-text isn't supported on this computer yet. Add a cloud API key " +
-    "(e.g. DASHSCOPE_API_KEY) to .env and restart livesub.";
+  return t("Local speech-to-text isn't supported on this computer yet. Add a cloud API key " +
+    "(e.g. DASHSCOPE_API_KEY) to .env and restart livesub.");
 }
 
 function welcomeNoBackend() {
   return [
-    h("h2", {}, "Speech-to-text isn't available"),
+    h("h2", {}, t("Speech-to-text isn't available")),
     h("p", {}, noBackendText()),
-    localUnavailable?.reason ? h("p", { className: "muted" }, `Details: ${localUnavailable.reason}.`) : "",
+    localUnavailable?.reason ? h("p", { className: "muted" }, t("Details: {reason}.", { reason: localUnavailable.reason })) : "",
   ];
 }
 
-// The models a new user picks between on the download card.
+// The models a new user picks between on the download card (English; t() at use).
 const WELCOME_MODELS = {
   "qwen-small": { name: "Standard", note: "Fast, runs on most computers.", recommended: true },
   "qwen-large": { name: "High accuracy", note: "More accurate, needs a fast computer." },
@@ -1347,8 +1369,8 @@ function welcomeDownload() {
   welcomeDl = new Map();
   const rows = [...modelsById.values()].filter((m) => m.managed && WELCOME_MODELS[m.id]).map((m) => {
     const info = WELCOME_MODELS[m.id];
-    const name = h("span", { className: "model-name" }, info.name,
-      info.recommended ? h("span", { className: "tag" }, "recommended") : "");
+    const name = h("span", { className: "model-name" }, t(info.name),
+      info.recommended ? h("span", { className: "tag" }, t("recommended")) : "");
     const status = h("span", { className: "model-status" });
     const btn = h("button", { type: "button" });
     btn.addEventListener("click", () => welcomeModelAction(m.id, btn.dataset.action));
@@ -1358,10 +1380,10 @@ function welcomeDownload() {
     return h("div", { className: "model-item" }, name, status, btn, bar);
   });
   const missing = [...modelsById.values()].filter((m) => m.state === "missing")
-    .map((m) => h("p", { className: "muted" }, `${m.env} in .env points to a missing directory: ${m.dir}`));
+    .map((m) => h("p", { className: "muted" }, t("{env} in .env points to a missing directory: {dir}", { env: m.env, dir: m.dir })));
   return [
-    h("h2", {}, "Download a speech model"),
-    h("p", {}, rows.length > 1 ? "Runs offline on this computer. Pick one:" : "Runs offline on this computer."),
+    h("h2", {}, t("Download a speech model")),
+    h("p", {}, rows.length > 1 ? t("Runs offline on this computer. Pick one:") : t("Runs offline on this computer.")),
     h("div", { className: "welcome-models" }, ...rows),
     ...missing,
   ];
@@ -1385,23 +1407,23 @@ function updateWelcomeDownload() {
     const m = modelsById.get(id);
     const info = WELCOME_MODELS[id];
     const pct = m.size ? Math.floor((m.done / m.size) * 100) : 0;
-    let status = `${fmtBytes(m.size)} · ${info.note}`;
+    let status = `${fmtBytes(m.size)} · ${t(info.note)}`;
     let action = "download";
-    let label = "Download";
+    let label = t("Download");
     if (m.state === "downloading") {
-      status = `Downloading ${pct}% · ${fmtBytes(m.done)} / ${fmtBytes(m.size)}`;
+      status = t("Downloading {pct}% · {done} / {size}", { pct, done: fmtBytes(m.done), size: fmtBytes(m.size) });
       action = "cancel";
-      label = "Cancel";
+      label = t("Cancel");
     } else if (m.state === "error") {
-      status = `Failed: ${m.error}`;
-      label = "Retry";
+      status = t("Failed: {error}", { error: m.error });
+      label = t("Retry");
     } else if (m.state === "ready") {
-      status = `${fmtBytes(m.size)} · Downloaded`;
+      status = t("{size} · Downloaded", { size: fmtBytes(m.size) });
       action = "use";
-      label = "Use";
+      label = t("Use");
     } else if (m.done > 0) {
-      status = `Paused at ${pct}% · ${fmtBytes(m.size)}`;
-      label = "Resume";
+      status = t("Paused at {pct}% · {size}", { pct, size: fmtBytes(m.size) });
+      label = t("Resume");
     }
     el.status.textContent = status;
     el.status.classList.toggle("err", m.state === "error");
@@ -1417,22 +1439,36 @@ function updateWelcomeDownload() {
 function welcomeSummary() {
   const asr = asrBackendSel.selectedOptions[0]?.textContent || "";
   const tr = translateBackendSel.selectedOptions[0]?.textContent || "";
-  if (translateBackendSel.value === "none") return [`Speech-to-text: ${asr}`, "Translation: off"];
+  const asrLine = t("Speech-to-text: {asr}", { asr });
+  if (translateBackendSel.value === "none") return [asrLine, t("Translation: off")];
   const src = currentSourceLang();
   const tgt = (targetLangInput.value || "Chinese (Simplified)").trim();
-  return [`Speech-to-text: ${asr}`, `Translation: ${tr} · ${src === "auto" ? "Auto-detect" : src} → ${tgt}`];
+  // The select's (translated) name when it has one, else the typed value.
+  const srcOpt = [...sourceLangSel.options].find((o) => o.value === src);
+  return [asrLine, t("Translation: {tr} · {src} → {tgt}", { tr, src: srcOpt ? srcOpt.textContent : src, tgt })];
 }
 
 function welcomeReady(summary) {
   return [
-    h("h2", {}, "Ready to caption"),
+    h("h2", {}, t("Ready to caption")),
     h("ol", {},
-      h("li", {}, "Pick ", h("b", {}, "Mic"), ", or ", h("b", {}, "Tab"),
-        " for a browser tab (turn on “Share tab audio”)."),
-      h("li", {}, "Press ", h("b", {}, "Start"), "."),
+      h("li", {}, ...tNodes("Pick {mic}, or {tab} for a browser tab (turn on \u201cShare tab audio\u201d).",
+        { mic: h("b", {}, t("Mic")), tab: h("b", {}, t("Tab")) })),
+      h("li", {}, ...tNodes("Press {start}.", { start: h("b", {}, t("Start")) })),
     ),
-    translateBackendSel.value === "none" ? "" : h("p", {}, "For better translations, add the topic and key names in ",
-      settingsLink("Settings → Session", "session"), "."),
+    translateBackendSel.value === "none" ? "" : h("p", {},
+      ...tNodes("For better translations, add the topic and key names in {link}.",
+        { link: settingsLink(t("Settings → Session"), "session") })),
     h("p", { className: "muted" }, summary[0], h("br"), summary[1]),
   ];
+}
+
+// After a language switch, rebuild the text code writes (setUiLang() did the
+// markup).
+function refreshLanguage() {
+  setToggleState(recording);
+  setStatus(...statusMsg);
+  welcomeKey = "";
+  loadBackends();  // option labels; re-renders the welcome card
+  loadModels();
 }

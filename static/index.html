@@ -34,13 +34,13 @@
         <circle cx="3.9" cy="4.25" r="0.6" fill="currentColor" stroke="none"/>
         <circle cx="5.9" cy="4.25" r="0.6" fill="currentColor" stroke="none"/>
       </svg>
-      <select id="input-source" title="Audio source">
-        <option value="mic">Mic</option>
-        <option value="screen">Tab</option>
+      <select id="input-source" title="Audio source" data-i18n-title>
+        <option value="mic" data-i18n>Mic</option>
+        <option value="screen" data-i18n>Tab</option>
       </select>
     </span>
     <span id="status">idle</span>
-    <div id="vu" title="audio level">
+    <div id="vu" title="audio level" data-i18n-title>
       <div id="vu-fill"></div>
     </div>
     <span class="spacer"></span>
@@ -53,48 +53,48 @@
         <circle cx="8" cy="8" r="4.3" stroke-width="1.4"/>
         <circle cx="8" cy="8" r="1.6" stroke-width="1.4"/>
         <path stroke-width="2.2" d="M13 8H15M11.54 11.54L12.95 12.95M8 13V15M4.46 11.54L3.05 12.95M3 8H1M4.46 4.46L3.05 3.05M8 3V1M11.54 4.46L12.95 3.05"/>
-      </svg><span class="label">Settings</span>
+      </svg><span class="label" data-i18n>Settings</span>
     </button>
     <!-- Only where Document Picture-in-Picture exists (Chrome / Edge). -->
-    <button id="pip" class="secondary" title="Show captions in an always-on-top window" hidden>
+    <button id="pip" class="secondary" title="Show captions in an always-on-top window" data-i18n-title hidden>
       <!-- The usual picture-in-picture glyph: a small window in a large one. -->
       <svg class="icon" viewBox="0 0 16 16" width="1em" height="1em" aria-hidden="true">
         <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/>
         <rect x="8" y="8" width="5" height="4" rx="0.5" fill="currentColor"/>
-      </svg><span class="label">Pop out</span>
+      </svg><span class="label" data-i18n>Pop out</span>
     </button>
-    <button id="clear" class="secondary"><span class="icon">✕</span><span class="label">Clear</span></button>
+    <button id="clear" class="secondary"><span class="icon">✕</span><span class="label" data-i18n>Clear</span></button>
   </div>
 
   <div id="settings-panel" hidden>
    <div class="settings-form">
     <div class="settings-tabs" role="tablist">
-      <button type="button" role="tab" data-tab="session">Session</button>
-      <button type="button" role="tab" data-tab="backends">Backends</button>
-      <button type="button" role="tab" data-tab="display">Display</button>
+      <button type="button" role="tab" data-tab="session" data-i18n>Session</button>
+      <button type="button" role="tab" data-tab="backends" data-i18n>Backends</button>
+      <button type="button" role="tab" data-tab="display" data-i18n>Display</button>
     </div>
     <div class="settings-tab-body">
     <div class="settings-tab" role="tabpanel" data-tab="session">
     <div class="row">
-      <label for="source-lang-select">Source language</label>
+      <label for="source-lang-select" data-i18n>Source language</label>
       <!-- Normal mode: 11-language <select> = intersection of what every
            hint-accepting backend supports (qwen3-asr-flash-realtime's set).
            Debug mode swaps in the free-text input + datalist below for
            access to qwen-local's extra ~20 languages and any value the user
            wants to pass through to Whisper's 70+. CSS toggles visibility. -->
       <select id="source-lang-select">
-        <option value="auto">Auto-detect</option>
-        <option value="Chinese">Chinese</option>
-        <option value="English">English</option>
-        <option value="Japanese">Japanese</option>
-        <option value="Korean">Korean</option>
-        <option value="Spanish">Spanish</option>
-        <option value="French">French</option>
-        <option value="German">German</option>
-        <option value="Italian">Italian</option>
-        <option value="Portuguese">Portuguese</option>
-        <option value="Russian">Russian</option>
-        <option value="Arabic">Arabic</option>
+        <option value="auto" data-i18n>Auto-detect</option>
+        <option value="Chinese" data-i18n>Chinese</option>
+        <option value="English" data-i18n>English</option>
+        <option value="Japanese" data-i18n>Japanese</option>
+        <option value="Korean" data-i18n>Korean</option>
+        <option value="Spanish" data-i18n>Spanish</option>
+        <option value="French" data-i18n>French</option>
+        <option value="German" data-i18n>German</option>
+        <option value="Italian" data-i18n>Italian</option>
+        <option value="Portuguese" data-i18n>Portuguese</option>
+        <option value="Russian" data-i18n>Russian</option>
+        <option value="Arabic" data-i18n>Arabic</option>
       </select>
       <input id="source-lang-input" type="text" placeholder="auto" list="lang-options">
       <datalist id="lang-options">
@@ -110,35 +110,35 @@
       </datalist>
     </div>
     <div class="row">
-      <label for="target-lang">Target language</label>
+      <label for="target-lang" data-i18n>Target language</label>
       <input id="target-lang" type="text" placeholder="Chinese (Simplified)">
     </div>
     <div class="row span2" id="scene-seed-row">
-      <label for="scene-seed">Topic for research <span class="optional">optional</span></label>
+      <label for="scene-seed"><span data-i18n>Topic for research</span> <span class="optional" data-i18n>optional</span></label>
       <div class="hint-scene-row">
-        <input id="scene-seed" type="text"
+        <input id="scene-seed" type="text" data-i18n-placeholder
           placeholder="e.g. μ's Final Live concert; ICASSP 2026 keynote; FromSoftware Elden Ring stream">
-        <button id="hint-generate" class="secondary" type="button">✨ Research</button>
+        <button id="hint-generate" class="secondary" type="button">✨ <span data-i18n>Research</span></button>
       </div>
-      <p class="hint">Fills in Scene and Glossary from a web search.</p>
+      <p class="hint" data-i18n>Fills in Scene and Glossary from a web search.</p>
       <span id="hint-status" class="muted"></span>
     </div>
     <div class="row span2">
-      <label for="scene">Scene summary <span class="optional">optional</span></label>
-      <textarea id="scene" rows="3"
+      <label for="scene"><span data-i18n>Scene summary</span> <span class="optional" data-i18n>optional</span></label>
+      <textarea id="scene" rows="3" data-i18n-placeholder
         placeholder="e.g. Live concert by Japanese idol group μ's; use casual Chinese fan-slang and preserve idol terminology like 推し / ペンライト."></textarea>
-      <p class="hint">Notes for the translator: setting, tone, style.</p>
+      <p class="hint" data-i18n>Notes for the translator: setting, tone, style.</p>
     </div>
     <div class="row span2">
-      <label for="glossary">Glossary <span class="optional">optional</span></label>
+      <label for="glossary"><span data-i18n>Glossary</span> <span class="optional" data-i18n>optional</span></label>
       <textarea id="glossary" rows="4"
         placeholder="高坂穂乃果, 絢瀬絵里, μ's, アンコール, ペンライト, ..."></textarea>
-      <p class="hint">Names and terms in the source language, comma-separated.</p>
+      <p class="hint" data-i18n>Names and terms in the source language, comma-separated.</p>
     </div>
     </div>
     <div class="settings-tab" role="tabpanel" data-tab="backends">
     <div class="row">
-      <label for="asr-backend">Speech-to-text backend</label>
+      <label for="asr-backend" data-i18n>Speech-to-text backend</label>
       <select id="asr-backend">
         <!-- options populated from /api/backends on load -->
       </select>
@@ -149,25 +149,32 @@
       </p>
     </div>
     <div class="row">
-      <label for="translate-backend">Translation backend</label>
+      <label for="translate-backend" data-i18n>Translation backend</label>
       <select id="translate-backend">
         <!-- options populated from /api/backends on load -->
       </select>
     </div>
     <!-- Only when the qwen_asr binary was found. -->
     <div class="row span2 settings-section" id="models-section" hidden>
-      <h3 class="section-title">Local models</h3>
+      <h3 class="section-title" data-i18n>Local models</h3>
       <div id="models-list"></div>
       <p id="models-dir" class="hint"></p>
     </div>
     </div>
     <div class="settings-tab" role="tabpanel" data-tab="display">
+    <div class="row">
+      <label for="ui-lang" data-i18n>Interface language</label>
+      <select id="ui-lang">
+        <option value="auto" data-i18n>Follow browser</option>
+        <!-- one option per UI_LANGS entry (app.js) -->
+      </select>
+    </div>
     <div class="row span2">
       <label class="toggle-row">
         <input id="font-large" type="checkbox">
         <span>
-          <span class="toggle-title">Large captions</span>
-          <span class="hint">For viewing from a distance.</span>
+          <span class="toggle-title" data-i18n>Large captions</span>
+          <span class="hint" data-i18n>For viewing from a distance.</span>
         </span>
       </label>
     </div>
@@ -175,8 +182,8 @@
       <label class="toggle-row">
         <input id="debug-mode" type="checkbox">
         <span>
-          <span class="toggle-title">Debug mode</span>
-          <span class="hint">Diagnostic badges and extra, less tested source languages.</span>
+          <span class="toggle-title" data-i18n>Debug mode</span>
+          <span class="hint" data-i18n>Diagnostic badges and extra, less tested source languages.</span>
         </span>
       </label>
     </div>
@@ -205,8 +212,8 @@
   </div>
   <!-- Takes the caption stack's place while it is in the pop-out window. -->
   <div id="pip-note" hidden>
-    Captions are in the pop-out window.
-    <button type="button" class="secondary" id="pip-return">Bring back</button>
+    <span data-i18n>Captions are in the pop-out window.</span>
+    <button type="button" class="secondary" id="pip-return" data-i18n>Bring back</button>
   </div>
 
   <script src="static/app.js" type="module"></script>

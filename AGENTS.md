@@ -11,13 +11,14 @@ need to change the code safely.
 - `src/config.ts` — env, translate-backend registry, Qwen model registry, data dir, where `qwen_asr` comes from (`QWEN_ASR_BIN`, then the `qwen-asr` npm package, then `PATH`).
 - `src/models.ts` — model downloads behind `/api/models`.
 - `src/prompts.ts` — translation prompts and `PairedStreamParser`; `src/hints.ts` — `/api/hints`; `src/util.ts` — queue, logger, helpers.
-- `static/` — the frontend: vanilla JS/HTML/CSS, no build step, one file per role.
+- `static/` — the frontend: vanilla JS/HTML/CSS, no build step, one file per role; `i18n.js` holds the UI translations.
 - `bin/livesub.mjs` — the CLI; `scripts/` — manual check scripts (not shipped, no test runner).
 
 ## Run, verify, release
 
 - `npm install`, then `npm start` (http://0.0.0.0:8000; the port is fixed). `.env` / `livesub.toml` are read from the working directory.
 - After editing `src/`: `npm run typecheck`. There are no frontend tests: check UI changes in a browser.
+- UI text: wrap it in `t()` (or `data-i18n` in the markup) with the English as the key, add the zh entry to `static/i18n.js`, then `node scripts/check-i18n.mjs`. `README.md` and `README.zh-CN.md` change together.
 - `qwen_asr` comes from the optional dependency `qwen-asr` (prebuilt, built from github.com/nexustar/qwen-asr); a `QWEN_ASR_BIN` in `.env` overrides it.
 - Before changing a default model: `npx tsx scripts/bench-models.ts translate [sdk:model ...]` (or `hints`), N>=12 rounds; small samples swing by 2x.
 - Release: push a `v*` tag; `.github/workflows/release.yml` tests the packed package and publishes it (prereleases on the `next` tag). The tag sets the version.
@@ -38,6 +39,7 @@ Each has a comment at the site.
 - Model downloads: files land as `.part` and are renamed only after the size and sha256 check; the HF revision, sizes and hashes in `QWEN_MODELS` change together. Model POSTs require a JSON content type so other sites can't trigger multi-GB downloads.
 - Frontend: polled UI (model rows, the welcome card) is updated in place, not rebuilt, so a click isn't lost mid-poll; `#settings-panel [hidden] { display: none }` must stay, as row/button display rules otherwise beat the `hidden` attribute.
 - Pop out moves the `#caption-stack` node itself into the Document PiP window, so caption code must keep using the element references taken at load, not `document.getElementById` at render time; body classes the caption CSS needs are mirrored (`PIP_BODY_CLASSES`).
+- i18n: text that code rewrites (status line, Start/Stop) must not carry `data-i18n`, or a language switch resets it; `setStatus` takes the English key so the status can be re-rendered.
 - Model IDs were last re-evaluated 2026-10 with measurements; confirm before bumping.
 
 ## Conventions
