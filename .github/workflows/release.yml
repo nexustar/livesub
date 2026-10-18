@@ -1,0 +1,73 @@
+name: Release
+
+# v* tag: check, test the packed package, publish. Manual run: check and test only.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      # Install the tarball into an empty app as a user would, start it, and
+      # check the server is up with the qwen-asr binary found.
+      - name: Run the packed package
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          mkdir "$RUNNER_TEMP/app" && cd "$RUNNER_TEMP/app"
+          npm init -y > /dev/null
+          npm install "$RUNNER_TEMP"/livesub-*.tgz
+          LIVESUB_DATA_DIR="$RUNNER_TEMP/data" npx livesub > livesub.log 2>&1 &
+          for i in $(seq 30); do curl -sf localhost:8000/api/models > models.json && break; sleep 1; done
+          cat livesub.log models.json
+          grep -q '"available":true' models.json
+          curl -sf localhost:8000/ | grep -q 'id="welcome"'
+
+  publish:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # npm trusted publishing (OIDC), no NPM_TOKEN needed
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm >= 11.5.1
+      - run: npm install -g npm@latest
+
+      # Dev dependencies: prepack compiles with tsc
+      - run: npm ci
+
+      - name: Publish
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          npm version "$version" --no-git-tag-version --allow-same-version
+          # Prereleases go to "next"
+          case "$version" in
+            *-*) npm publish --access public --tag next ;;
+            *)   npm publish --access public ;;
+          esac

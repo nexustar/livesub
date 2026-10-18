@@ -82,8 +82,21 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 ### Start the server
 
+From npm (prereleases are on the `next` tag):
+
 ```bash
-git clone <repo> && cd livesub
+npm install -g livesub@next
+mkdir -p ~/livesub && cd ~/livesub   # .env and livesub.toml are read from here
+livesub                              # http://0.0.0.0:8000
+```
+
+The package ships `.env.example` and `livesub.toml.example` to copy from
+(`npm root -g` shows where it's installed).
+
+From source:
+
+```bash
+git clone https://github.com/nexustar/livesub && cd livesub
 cp .env.example .env       # then edit per your chosen path above
 npm install
 npm start                  # http://0.0.0.0:8000

@@ -363,5 +363,5 @@ const qwenMissing = qwenUnavailable();
 if (qwenMissing) log.info(`local qwen-asr unavailable: ${qwenMissing.reason}`);
 
 httpServer.listen(PORT, HOST, () => {
-  log.info(`livesub (ts) listening on http://${HOST}:${PORT}`);
+  log.info(`livesub listening on http://${HOST}:${PORT}`);
 });
