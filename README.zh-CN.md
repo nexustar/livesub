@@ -51,6 +51,10 @@ livesub 时所在的目录读取。全部选项见安装包中的 `.env.example`
 下载慢时可以设置 `HF_ENDPOINT` 使用 Hugging Face 镜像（例如
 `HF_ENDPOINT=https://hf-mirror.com`）。
 
+livesub 默认监听 `127.0.0.1:8000`。想在手机等其他设备上看字幕，用
+`livesub --host 0.0.0.0` 启动，然后访问 `http://<这台电脑的 IP>:8000`；此时同一
+网络里的任何人都能使用它，包括你的 API key。`--port` 可以换端口。
+
 本地语音识别支持 macOS 13.3+ 和 Linux（x86-64 需支持 AVX2，或 arm64；
 glibc 2.28+）。其他系统请使用云端后端。
 

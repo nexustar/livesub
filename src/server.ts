@@ -3,19 +3,24 @@
 // directly (no framework), matching the project's "one server file" ethos.
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import { GoogleGenAI } from "@google/genai";
 
 import {
+  ALLOWED_HOSTS,
   DATA_DIR,
   DEFAULT_TARGET_LANG,
   GEMINI_API_KEY,
+  HOST,
+  PORT,
   QWEN_CHUNK_SEC_DEFAULT,
   QWEN_CHUNK_SEC_MAX,
   QWEN_CHUNK_SEC_MIN,
   STATIC_DIR,
+  isLoopbackHost,
   listAsrBackends,
   listTranslateBackends,
   pickHintsBackend,
@@ -26,9 +31,6 @@ import { generateHintsClaude, generateHintsGemini } from "./hints.js";
 import { cancelDownload, deleteModel, listModels, startDownload } from "./models.js";
 import { Pipeline } from "./pipeline.js";
 import { log } from "./util.js";
-
-const PORT = 8000;
-const HOST = "0.0.0.0";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -167,11 +169,48 @@ function handleModel(req: IncomingMessage, res: ServerResponse, id: string, acti
   else sendJson(res, 200, listModels());
 }
 
+// ---------- request guards ----------
+
+// Any page in the browser can send requests here: WebSockets skip CORS, and
+// DNS rebinding makes a page same-origin. So an Origin must be this server,
+// and on loopback so must the Host (on the LAN the names aren't known).
+// ALLOWED_HOSTS adds names, e.g. a reverse proxy's.
+
+function hostnameOf(hostHeader: string): string {
+  return hostHeader.toLowerCase().replace(/:\d+$/, "").replace(/^\[(.*)\]$/, "$1");
+}
+
+function hostAllowed(req: IncomingMessage): boolean {
+  if (!isLoopbackHost(HOST)) return true;
+  const h = hostnameOf(req.headers.host ?? "");
+  return isLoopbackHost(h) || ALLOWED_HOSTS.has(h);
+}
+
+function originAllowed(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  if (!origin) return true;  // not a browser (scripts, curl)
+  let u: URL;
+  try {
+    u = new URL(origin);
+  } catch {
+    return false;  // "null" from file:// and sandboxed frames
+  }
+  return u.host === req.headers.host || ALLOWED_HOSTS.has(u.hostname.toLowerCase());
+}
+
 // ---------- HTTP request router ----------
 
 const httpServer = createServer((req, res) => {
   const url = req.url ?? "/";
   const path = url.split("?")[0];
+
+  // Cross-site GETs can't read the response; anything else must be same-origin.
+  const safe = req.method === "GET" || req.method === "HEAD";
+  if (!hostAllowed(req) || (!safe && !originAllowed(req))) {
+    log.warning(`refused ${req.method} ${path} (host ${req.headers.host}, origin ${req.headers.origin})`);
+    res.writeHead(403).end("forbidden");
+    return;
+  }
 
   if (req.method === "GET" && path === "/") {
     serveStatic(res, "index.html");
@@ -211,7 +250,15 @@ const httpServer = createServer((req, res) => {
 
 // ---------- /ws websocket endpoint ----------
 
-const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+const wss = new WebSocketServer({
+  server: httpServer,
+  path: "/ws",
+  verifyClient: ({ req }: { req: IncomingMessage }) => {
+    const ok = hostAllowed(req) && originAllowed(req);
+    if (!ok) log.warning(`refused /ws (host ${req.headers.host}, origin ${req.headers.origin})`);
+    return ok;
+  },
+});
 
 function toBuffer(data: RawData): Buffer {
   if (Buffer.isBuffer(data)) return data;
@@ -362,6 +409,22 @@ log.info(`data dir: ${DATA_DIR}`);
 const qwenMissing = qwenUnavailable();
 if (qwenMissing) log.info(`local qwen-asr unavailable: ${qwenMissing.reason}`);
 
+// ws re-emits listen errors (port taken, bad host); report them in one line.
+wss.on("error", (e: NodeJS.ErrnoException) => {
+  log.error(
+    e.code === "EADDRINUSE"
+      ? `port ${PORT} is already in use: stop the other server or pick a port with --port / LIVESUB_PORT`
+      : `cannot listen on ${HOST}:${PORT}: ${e.message}`,
+  );
+  process.exit(1);
+});
+
 httpServer.listen(PORT, HOST, () => {
-  log.info(`livesub listening on http://${HOST}:${PORT}`);
+  // The real port (PORT 0 picks one); a wildcard host is opened as localhost.
+  const { port } = httpServer.address() as AddressInfo;
+  const shown = HOST === "0.0.0.0" || HOST === "::" ? "localhost" : HOST.includes(":") ? `[${HOST}]` : HOST;
+  log.info(`livesub listening on http://${shown}:${port}`);
+  if (!isLoopbackHost(HOST)) {
+    log.warning(`listening on ${HOST}: anyone who can reach port ${port} can use this server and its API keys`);
+  }
 });

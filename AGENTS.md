@@ -16,7 +16,7 @@ need to change the code safely.
 
 ## Run, verify, release
 
-- `npm install`, then `npm start` (http://0.0.0.0:8000; the port is fixed). `.env` / `livesub.toml` are read from the working directory.
+- `npm install`, then `npm start` (http://127.0.0.1:8000; `LIVESUB_HOST` / `LIVESUB_PORT`, or `--host` / `--port` on the CLI). `.env` / `livesub.toml` are read from the working directory.
 - After editing `src/`: `npm run typecheck`. There are no frontend tests: check UI changes in a browser.
 - UI text: wrap it in `t()` (or `data-i18n` in the markup) with the English as the key, add the zh entry to `static/i18n.js`, then `node scripts/check-i18n.mjs`. `README.md` and `README.zh-CN.md` change together.
 - `qwen_asr` comes from the optional dependency `qwen-asr` (prebuilt, built from github.com/nexustar/qwen-asr); a `QWEN_ASR_BIN` in `.env` overrides it.
@@ -36,6 +36,7 @@ Each has a comment at the site.
 - Client: a failed revision (`translation_done` with `ok: false`) keeps the previous translation; `stop()` clears `ws.onclose` so only closes we didn't ask for reach it. Those reconnect on the same audio capture with backoff (close code 1003 = config refused, final; sessions that open and fail repeatedly give up), replaying up to 15 s of audio captured meanwhile; each new session restarts sids at 0, so on-screen sentences are retired to history first.
 - Thinking-off is per model on the Anthropic SDK path (`anthropicThinkingOff`): `claude-sonnet-5-5` needs `{type: "between_tools"}`, others `disabled`; probe a new Claude model before adding it. Gemini translate uses `thinkingLevel: MINIMAL` (`thinkingBudget: 0` 400s on 3.5); default stays `gemini-3.1-flash-lite` (3.5 measured slower; re-bench before 3.1's 2027-05-07 shutdown).
 - Hints: keep `web_search_20250305` (newer versions slower and costlier), `max_tokens: 4096` (thinking counts against it), and the effort level. Gemini hints stays `gemini-2.5-flash` (no free-tier Search grounding on 3.x).
+- Request guards (`server.ts`): an Origin must match the server and, on loopback, so must the Host. WebSockets bypass CORS, and DNS rebinding makes any page same-origin; don't drop either check.
 - Model downloads: files land as `.part` and are renamed only after the size and sha256 check; the HF revision, sizes and hashes in `QWEN_MODELS` change together. Model POSTs require a JSON content type so other sites can't trigger multi-GB downloads.
 - Frontend: polled UI (model rows, the welcome card) is updated in place, not rebuilt, so a click isn't lost mid-poll; `#settings-panel [hidden] { display: none }` must stay, as row/button display rules otherwise beat the `hidden` attribute.
 - Pop out moves the `#caption-stack` node itself into the Document PiP window, so caption code must keep using the element references taken at load, not `document.getElementById` at render time; body classes the caption CSS needs are mirrored (`PIP_BODY_CLASSES`).

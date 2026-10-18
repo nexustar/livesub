@@ -223,6 +223,26 @@ export const DATA_DIR = process.env.LIVESUB_DATA_DIR ? resolveRel(process.env.LI
 // https://hf-mirror.com) where huggingface.co is slow or blocked.
 export const HF_ENDPOINT = env("HF_ENDPOINT", "https://huggingface.co").replace(/\/+$/, "");
 
+// Listen address (CLI --host / --port). Loopback by default, as anyone who
+// can reach the port can spend the API keys; 0.0.0.0 opens it to the LAN.
+// Port 0 takes a free one.
+export const HOST = env("LIVESUB_HOST").trim() || "127.0.0.1";
+export const PORT = (() => {
+  const raw = env("LIVESUB_PORT", "8000").trim();
+  const n = Number(raw);
+  if (!/^\d+$/.test(raw) || n > 65535) throw new Error(`LIVESUB_PORT must be 0-65535, got ${JSON.stringify(raw)}`);
+  return n;
+})();
+// Extra hostnames accepted in Host / Origin headers, comma-separated: a
+// reverse proxy's public name (see the request guards in server.ts).
+export const ALLOWED_HOSTS = new Set(
+  env("LIVESUB_ALLOWED_HOSTS").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean),
+);
+
+export function isLoopbackHost(h: string): boolean {
+  return h === "localhost" || h === "::1" || /^127\.\d+\.\d+\.\d+$/.test(h);
+}
+
 // Prebuilt qwen_asr from the qwen-asr npm package (an optional dependency:
 // npm skips it where it has no binary, e.g. Windows). On failure, bin is ""
 // and reason says why, for the UI.
