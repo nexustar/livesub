@@ -73,8 +73,9 @@ device, such as a phone, start it with `livesub --host 0.0.0.0` and visit
 `http://<this computer's IP>:8000`; anyone on that network can then use
 it, and your API keys. `--port` picks another port.
 
-Local speech-to-text runs on macOS 13.3+ and on Linux (x86-64 with AVX2
-or arm64, glibc 2.28+). Elsewhere, use a cloud backend.
+Local speech-to-text runs on macOS 13.3+, on Linux (x86-64 with AVX2 or
+arm64, glibc 2.28+) and on Windows (x86-64 with AVX2). Elsewhere, use a
+cloud backend.
 
 ## Running from source
 

@@ -57,6 +57,6 @@
     "typescript": "^5.6.0"
   },
   "optionalDependencies": {
-    "qwen-asr": "^0.2.0-alpha.2"
+    "qwen-asr": "^0.2.0-alpha.3"
   }
 }
