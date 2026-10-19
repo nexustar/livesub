@@ -338,6 +338,7 @@ body.settings-open #history { display: none; }
   color: #fbbf24;
 }
 #settings-panel .asr-model-hint.err { color: #ef4444; }
+#settings-panel .asr-model-hint.info { color: #777; }
 #settings-panel .asr-model-hint[hidden] { display: none; }
 .asr-model-hint button {
   font-size: 12px;
@@ -386,6 +387,19 @@ body.settings-open #history { display: none; }
 }
 #settings-panel input[type="range"]:disabled { opacity: 0.5; }
 
+#settings-panel .context-card {
+  gap: 18px;
+  padding: 14px;
+  border: 1px solid #222;
+  border-radius: 8px;
+  background: #141414;
+}
+#settings-panel .context-note { color: #f59e0b; }
+
+/* Session fields the picked backends don't use. */
+#settings-panel .row.unused { opacity: 0.45; }
+#settings-panel .row.unused :disabled { opacity: 1; }
+
 /* A titled group inside a tab, divided from the fields above it. */
 #settings-panel .settings-section {
   margin-top: 6px;
@@ -409,7 +423,8 @@ body.settings-open #history { display: none; }
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-#models-list {
+#models-list,
+#mt-models-list {
   display: flex;
   flex-direction: column;
   gap: 8px;

@@ -28,7 +28,8 @@ import {
   qwenUnavailable,
 } from "./config.js";
 import { generateHintsClaude, generateHintsGemini } from "./hints.js";
-import { cancelDownload, deleteModel, listModels, startDownload } from "./models.js";
+import { cancelDownload, deleteModel, listModels, mtRouteModels, startDownload } from "./models.js";
+import { mtLangCode } from "./mt.js";
 import { Pipeline } from "./pipeline.js";
 import { log } from "./util.js";
 
@@ -169,6 +170,18 @@ function handleModel(req: IncomingMessage, res: ServerResponse, id: string, acti
   else sendJson(res, 200, listModels());
 }
 
+// ---------- /api/mt-route ----------
+
+// The models local translation needs for a pair of UI language names. null
+// fields: no model covers it; models [] for the same language or auto.
+function mtRouteInfo(sourceName: string, targetName: string) {
+  const target = mtLangCode(targetName);
+  const auto = !sourceName || sourceName.toLowerCase() === "auto";
+  const source = auto ? "auto" : mtLangCode(sourceName);
+  const models = target && source && source !== "auto" ? mtRouteModels(source, target) : auto && target ? [] : null;
+  return { source, target, models };
+}
+
 // ---------- request guards ----------
 
 // Any page in the browser can send requests here: WebSockets skip CORS, and
@@ -227,6 +240,11 @@ const httpServer = createServer((req, res) => {
   }
   if (req.method === "GET" && path === "/api/models") {
     sendJson(res, 200, listModels());
+    return;
+  }
+  if (req.method === "GET" && path === "/api/mt-route") {
+    const q = new URL(url, "http://x").searchParams;
+    sendJson(res, 200, mtRouteInfo(q.get("source") ?? "", q.get("target") ?? ""));
     return;
   }
   const modelRoute = /^\/api\/models\/([\w-]+)(?:\/(download|cancel))?$/.exec(path);
@@ -348,6 +366,19 @@ function startSession(ws: WebSocket, firstData: Buffer, preConfigAudio: Buffer[]
   const trAvailable = new Set(listTranslateBackends().map((b) => b.id));
   // `none` is always present, so this fallback always lands somewhere.
   if (!trAvailable.has(translateBackend)) translateBackend = trAvailable.values().next().value ?? "none";
+  // Refused like a missing ASR model; an auto source is checked per sentence.
+  if (translateBackend === "local") {
+    const route = mtRouteInfo(sourceLang, targetLang);
+    let refusal = "";
+    if (!route.target) refusal = `local translation has no model for target language ${JSON.stringify(targetLang.slice(0, 40))}`;
+    else if (!route.source) refusal = `local translation has no model for source language ${JSON.stringify(sourceLang.slice(0, 40))}`;
+    else if (!route.models) refusal = `local translation can't translate ${route.source} to ${route.target}`;
+    else if (route.models.some((m) => m.state !== "ready")) refusal = "local translation models are not downloaded yet";
+    if (refusal) {
+      ws.close(1003, refusal);
+      return null;
+    }
+  }
 
   log.info(`config: asr=${asrBackend} tr=${translateBackend} src=${JSON.stringify(sourceLang)} dst=${JSON.stringify(targetLang)} scene=${scene.length}ch gloss=${glossary.length}ch`);
 

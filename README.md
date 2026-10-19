@@ -6,11 +6,12 @@ Real-time bilingual captions for livestreams, videos and calls. The
 captions show in a browser page; the audio comes from a browser tab or a
 microphone. Speech-to-text can run entirely on your computer with
 Qwen3-ASR, which holds up even over background music; translation is
-your choice of a cloud model, a local LLM, or none.
+your choice of a cloud model, a local LLM, Firefox's offline translation
+models, or none.
 
 ## Quick start
 
-Needs Node.js 20+ and Chrome or Edge (for capturing tab audio).
+Needs Node.js 22.15+ and Chrome or Edge (for capturing tab audio).
 
 ```bash
 npm install -g livesub@next
@@ -23,9 +24,11 @@ captions into a small always-on-top window you can place over the video.
 The interface follows your browser's language (English or Chinese); change
 it in **Settings → Display**.
 
-For translation, create a `.env` file with a key, e.g.
-`DEEPSEEK_API_KEY=sk-...`, and start livesub from the folder that holds
-it (it reads `.env` from the current folder).
+Without any API key, translation runs on your computer with Firefox's
+translation models (pick **Local translation** and download the models for your
+language pair). For better translations, create a `.env` file with a key,
+e.g. `DEEPSEEK_API_KEY=sk-...`, and start livesub from the folder that
+holds it (it reads `.env` from the current folder).
 
 ## Backends
 
@@ -45,6 +48,15 @@ Choose them in **Settings → Backends**.
 | Claude Haiku / Sonnet | `ANTHROPIC_API_KEY` (best quality) |
 | Gemini | `GEMINI_API_KEY` |
 | Ollama, LM Studio, OpenRouter, ... | an entry in `livesub.toml` |
+| Local translation | none; download the models for your language pair from the page (50–70 MB per direction) |
+
+Local translation uses the models Firefox translates web pages with, on
+the CPU (about 20–60 ms a sentence, 300–600 MB of memory). Every model
+translates to or from English, so other pairs go through English and need
+two models. It translates each sentence on its own: no scene notes or
+glossary, and names often come out wrong. With **Auto-detect**, a
+sentence's language is guessed from its script, and Latin script is taken
+as English.
 
 ## Configuration
 
@@ -54,7 +66,7 @@ backends) are read from the folder you start livesub in. See
 option. Models are downloaded to the platform data dir (e.g.
 `~/Library/Application Support/livesub` on macOS) unless
 `LIVESUB_DATA_DIR` is set; set `HF_ENDPOINT` to use a Hugging Face
-mirror.
+mirror, and `MT_ENDPOINT` for a mirror of the translation models.
 
 livesub listens on `127.0.0.1:8000`. To open the captions on another
 device, such as a phone, start it with `livesub --host 0.0.0.0` and visit
@@ -76,4 +88,6 @@ npm start
 
 ## License
 
-MIT
+MIT. `vendor/bergamot` holds Mozilla's translation engine (MPL-2.0, with
+the licences of the libraries it is built from); the translation models
+are Mozilla's, under MPL-2.0.

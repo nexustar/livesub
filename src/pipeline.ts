@@ -64,6 +64,8 @@ import {
   extractRetryDelay,
   findLastPunct,
 } from "./prompts.js";
+import { acquireEngine, detectLang, mtLangCode, mtModelReady, mtRoute, polishOutput, releaseEngine, routeKey, type MtEngine } from "./mt.js";
+import type { MtModel } from "./mt-models.js";
 import { AbortError, AsyncQueue, chunkPeak, log, monotonic, sleep } from "./util.js";
 
 // ---------- small process/stream helpers ----------
@@ -236,6 +238,11 @@ export class Pipeline {
   private pairedPrevSid: number | null = null;
   private pairedPrevSrc = "";
   private pairedPrevDst = "";
+  // Local translation; source null = detect per sentence.
+  private readonly mtSource: string | null = null;
+  private readonly mtTarget: string | null = null;
+  private readonly mtEngines = new Map<string, MtEngine>();
+  private readonly mtWarned = new Set<string>();
 
   constructor(opts: PipelineOpts) {
     this.clientWs = opts.clientWs;
@@ -247,6 +254,11 @@ export class Pipeline {
     this.asrBackend = opts.asrBackend;
     this.translateBackend = opts.translateBackend;
     this.qwenChunkSec = opts.qwenChunkSec;
+    if (this.translateBackend === "local") {
+      const src = this.sourceLang.trim().toLowerCase();
+      this.mtSource = src && src !== "auto" ? mtLangCode(this.sourceLang) : null;
+      this.mtTarget = mtLangCode(this.targetLang);
+    }
   }
 
   // ----- audio ingest, wired to the client websocket in server.ts -----
@@ -262,6 +274,11 @@ export class Pipeline {
   }
 
   async run(): Promise<void> {
+    // Load the engine now, not on the first sentence (~1 s).
+    if (this.mtSource && this.mtTarget) {
+      const route = mtRoute(this.mtSource, this.mtTarget);
+      if (route?.length) this.mtEngine(route);
+    }
     await this.safeSendJson({ type: "ready" });
     const asr = this.asrWorker();
     const tr = this.translatorWorker();
@@ -271,6 +288,8 @@ export class Pipeline {
     } finally {
       this.stopRequested = true;
       await idle.catch(() => {});
+      for (const e of this.mtEngines.values()) releaseEngine(e);
+      this.mtEngines.clear();
     }
     log.info("session closed");
   }
@@ -1169,7 +1188,7 @@ export class Pipeline {
   private async maybeTriggerPartial(): Promise<void> {
     const backendCfg = getTranslateBackend(this.translateBackend);
     const sdk = backendCfg?.sdk;
-    if (sdk !== "anthropic" && sdk !== "openai") return;
+    if (sdk !== "anthropic" && sdk !== "openai" && sdk !== "bergamot") return;
     const textNow = this.sentenceBuffer.trim();
     if (!textNow) return;
     const now = monotonic();
@@ -1423,6 +1442,7 @@ export class Pipeline {
     try {
       if (sdk === "anthropic") full = await this.translateOneClaude(sid, rev, text, history, isPartial, metrics, signal);
       else if (sdk === "openai") full = await this.translateOneOpenai(sid, rev, text, history, isPartial, metrics, signal);
+      else if (sdk === "bergamot") full = await this.translateOneLocal(sid, rev, text, metrics, signal);
       else full = await this.translateOneGemini(sid, rev, text, history, isPartial, metrics);
     } catch (e) {
       if (signal?.aborted || e instanceof AbortError) {
@@ -1496,6 +1516,46 @@ export class Pipeline {
         throw e;
       }
     }
+  }
+
+  // A sentence it can't translate (same language, no model) shows as is.
+  private async translateOneLocal(sid: number, rev: number, text: string, metrics: Metrics, signal?: AbortSignal): Promise<string> {
+    const to = this.mtTarget;
+    if (!to) throw new Error(`no local translation model for target ${JSON.stringify(this.targetLang)}`);
+    const from = this.mtSource ?? detectLang(text);
+    const route = from ? mtRoute(from, to) : null;
+    let out = text;
+    if (route && route.length > 0 && route.every(mtModelReady)) {
+      const engine = this.mtEngine(route);
+      try {
+        out = polishOutput(await engine.translate(text), to);
+      } catch (e) {
+        // A dead engine stays dead; the next sentence starts a new one.
+        this.mtEngines.delete(engine.key);
+        releaseEngine(engine);
+        throw e;
+      }
+    } else if (route?.length !== 0) {
+      const what = `${from ?? "unknown"}-${to}`;
+      if (!this.mtWarned.has(what)) {
+        this.mtWarned.add(what);
+        log.warning(`local translation: no downloaded model for ${what}; showing the transcript`);
+      }
+    }
+    if (signal?.aborted) throw new AbortError();
+    metrics.firstChunkAt = monotonic();
+    await this.safeSendJson({ type: "translation", sid, rev, text: out });
+    return out;
+  }
+
+  private mtEngine(route: MtModel[]): MtEngine {
+    const key = routeKey(route);
+    let engine = this.mtEngines.get(key);
+    if (!engine) {
+      engine = acquireEngine(route);
+      this.mtEngines.set(key, engine);
+    }
+    return engine;
   }
 
   private async translateOneClaude(

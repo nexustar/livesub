@@ -36,6 +36,7 @@ const LOCALES = {
     "pick a tab/window with audio…": "请选择一个有声音的标签页…",
     "no speech-to-text backend configured": "没有可用的语音识别后端",
     "download the speech-to-text model first": "请先下载语音识别模型",
+    "download the translation models first": "请先下载翻译模型",
     "Tab capture isn't supported in this browser.": "此浏览器不支持标签页音频采集。",
     "No audio track delivered.": "没有收到音频。",
     "Firefox on Linux Wayland can't capture tab audio. Try Chrome or Chromium, or route system audio through a PipeWire virtual mic and use Mic.":
@@ -95,7 +96,13 @@ const LOCALES = {
     "Voxtral (local)": "Voxtral（本地）",
     "Qwen ASR (Cloud)": "Qwen ASR（云端）",
     "None (transcript only)": "无（仅转写）",
-    "Local models": "本地模型",
+    "Local translation": "本地翻译",
+    "Speech-to-text models": "语音识别模型",
+    "Translation models": "翻译模型",
+    "The scene summary is only used with LLM translation (Claude, DeepSeek, Gemini, …).":
+      "场景说明只在使用大模型翻译（Claude、DeepSeek、Gemini 等）时生效。",
+    "These are only used with LLM translation (Claude, DeepSeek, Gemini, …).":
+      "以下各项只在使用大模型翻译（Claude、DeepSeek、Gemini 等）时生效。",
     "Downloads go to {dir}": "下载位置：{dir}",
     "Ready": "就绪",
     "Ready — from {env}": "就绪（来自 {env}）",
@@ -117,6 +124,15 @@ const LOCALES = {
     "{label}: latency vs. CPU": "{label}：延迟与 CPU 占用",
     "Lower latency": "延迟更低",
     "Lower CPU": "CPU 更省",
+    // Local translation
+    "No local model translates into “{lang}”.": "没有能译成“{lang}”的本地模型。",
+    "No local model translates from {lang}.": "没有能翻译{lang}的本地模型。",
+    "No local models for {src} → {tgt}.": "没有 {src} → {tgt} 的本地模型。",
+    "With Auto-detect, each sentence's language is guessed from its script (Latin script counts as English), and only languages with downloaded models are translated. Pick the source language to download its models.":
+      "自动检测时按文字判断每句的语言（拉丁字母一律当作英语），只翻译已下载模型的语言。选定源语言后即可下载对应模型。",
+    "Source and target are the same language: captions show the transcript.": "源语言和目标语言相同，字幕直接显示转写。",
+    "Translation models for {path} ({size})": "需要 {path} 的翻译模型（{size}）",
+    "Models from Firefox: {path}": "模型来自 Firefox：{path}",
 
     // Display tab
     "Interface language": "界面语言",

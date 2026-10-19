@@ -11,6 +11,7 @@ import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadDotenv } from "dotenv";
 import { parse as parseToml } from "smol-toml";
+import { MT_BASE_URL } from "./mt-models.js";
 import { log } from "./util.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // .../src (dev) or .../dist (built)
@@ -93,7 +94,7 @@ export const SOURCE_LANG_ISO: Record<string, string> = {
 
 export const DEEPSEEK_BASE_URL = env("DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic");
 
-export type TranslateSdk = "anthropic" | "openai" | "gemini" | "none";
+export type TranslateSdk = "anthropic" | "openai" | "gemini" | "bergamot" | "none";
 
 export interface TranslateBackend {
   id: string;
@@ -119,6 +120,8 @@ export const TRANSLATE_BACKENDS_BUILTIN: TranslateBackend[] = [
     base_url: DEEPSEEK_BASE_URL,
   },
   { id: "gemini", label: "Gemini", sdk: "gemini", model: null, api_key_env: "GEMINI_API_KEY" },
+  // After the keyed ones: the default only without an API key.
+  { id: "local", label: "Local translation", sdk: "bergamot", model: null },
   { id: "none", label: "None (transcript only)", sdk: "none", model: null },
 ];
 
@@ -193,7 +196,7 @@ export const HISTORY_PAIRS = 5;
 // Sentence-boundary fallbacks when no .!?。！？ shows up:
 export const SENTENCE_MAX_CHARS = 50;
 export const SENTENCE_IDLE_FLUSH_SEC = 5.0;
-// Intra-sentence partial translation pacing (anthropic-/openai-SDK backends).
+// Intra-sentence partial translation pacing (anthropic-/openai-SDK and local backends).
 export const PARTIAL_HARD_FLOOR_SEC = 0.4;
 export const PARTIAL_MIN_NEW_BYTES = 24;
 
@@ -222,6 +225,8 @@ export const DATA_DIR = process.env.LIVESUB_DATA_DIR ? resolveRel(process.env.LI
 // Hugging Face endpoint for model downloads; point at a mirror (e.g.
 // https://hf-mirror.com) where huggingface.co is slow or blocked.
 export const HF_ENDPOINT = env("HF_ENDPOINT", "https://huggingface.co").replace(/\/+$/, "");
+// Local translation models: Firefox's CDN or a mirror of it.
+export const MT_ENDPOINT = env("MT_ENDPOINT", MT_BASE_URL).replace(/\/+$/, "");
 
 // Listen address (CLI --host / --port). Loopback by default, as anyone who
 // can reach the port can spend the API keys; 0.0.0.0 opens it to the LAN.
@@ -442,19 +447,21 @@ export function qwenModelReady(m: QwenModel): boolean {
 }
 
 // Translate dropdown contents — registry filtered by env availability.
-export function listTranslateBackends(): Array<{ id: string; label: string }> {
+// context: uses the scene summary and glossary.
+export function listTranslateBackends(): Array<{ id: string; label: string; context: boolean }> {
   return allTranslateBackends()
     .filter(backendAvailable)
-    .map((b) => ({ id: b.id, label: b.label }));
+    .map((b) => ({ id: b.id, label: b.label, context: b.sdk === "anthropic" || b.sdk === "openai" || b.sdk === "gemini" }));
 }
 
 // ASR dropdown contents — cloud gated by API key, local gated by binary + model
 // dir presence. Local backends listed first so they're the default on a fresh
 // install when both local and cloud are available. With the qwen binary found,
 // a managed model is listed even before it's downloaded (ready: false) so the
-// UI can offer the download; only ready entries can run a session.
-export function listAsrBackends(): Array<{ id: string; label: string; ready: boolean }> {
-  const out: Array<{ id: string; label: string; ready: boolean }> = [];
+// UI can offer the download; only ready entries can run a session. glossary:
+// biases recognition with the glossary.
+export function listAsrBackends(): Array<{ id: string; label: string; ready: boolean; glossary?: boolean }> {
+  const out: Array<{ id: string; label: string; ready: boolean; glossary?: boolean }> = [];
   if (qwenBinAvailable()) {
     for (const m of QWEN_MODELS) {
       const ready = qwenModelReady(m);
@@ -464,7 +471,7 @@ export function listAsrBackends(): Array<{ id: string; label: string; ready: boo
   if (localAsrAvailable(VOXTRAL_BIN, VOXTRAL_MODEL_DIR)) out.push({ id: "voxtral", label: "Voxtral (local)", ready: true });
   if (DASHSCOPE_API_KEY) out.push({ id: "qwen-cloud", label: "Qwen ASR (Cloud)", ready: true });
   if (OPENAI_API_KEY) out.push({ id: "openai-realtime", label: "OpenAI Realtime", ready: true });
-  if (process.env.GEMINI_API_KEY) out.push({ id: "gemini", label: "Gemini Live", ready: true });
+  if (process.env.GEMINI_API_KEY) out.push({ id: "gemini", label: "Gemini Live", ready: true, glossary: true });
   return out;
 }
 

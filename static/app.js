@@ -144,6 +144,8 @@ function populateBackendSelect(sel, items, savedValue) {
     // picking one offers the download under the select.
     opt.textContent = it.ready === false ? t("{label} — not downloaded", { label: t(it.label) }) : t(it.label);
     opt.dataset.ready = it.ready === false ? "0" : "1";
+    opt.dataset.context = it.context ? "1" : "0";
+    opt.dataset.glossary = it.glossary ? "1" : "0";
     sel.appendChild(opt);
   }
   if (savedValue && [...sel.options].some(o => o.value === savedValue)) {
@@ -170,6 +172,8 @@ async function loadBackends() {
   let savedTr = localStorage.getItem(LS_TR);
   if (savedTr === "claude") savedTr = "claude-haiku";
   populateBackendSelect(translateBackendSel, data.translate || [], savedTr);
+  updateMtHint();
+  applyContextUse();
   // Hide the topic/Research row entirely if no hints backend is configured.
   // Manually-filled Scene + Glossary fields stay — they work independently.
   if (!data.hints_available) {
@@ -185,6 +189,8 @@ loadBackends();
 // doesn't swap the button out from under a click.
 const modelsSection = document.getElementById("models-section");
 const modelsListEl = document.getElementById("models-list");
+const mtModelsSection = document.getElementById("mt-models-section");
+const mtModelsListEl = document.getElementById("mt-models-list");
 const modelsDirEl = document.getElementById("models-dir");
 const modelEls = new Map();  // id -> {status, bar, fill, btn}
 const modelPrev = new Map();  // id -> {state, done, t} from the last poll
@@ -259,6 +265,10 @@ async function modelAction(id, action) {
   loadModels();
 }
 
+function modelLabel(m) {
+  return m.from ? `${langName(m.from)} → ${langName(m.to)}` : m.label;
+}
+
 function modelEl(m) {
   let el = modelEls.get(m.id);
   if (el) return el;
@@ -266,7 +276,6 @@ function modelEl(m) {
   item.className = "model-item";
   const name = document.createElement("span");
   name.className = "model-name";
-  name.textContent = m.label;
   const status = document.createElement("span");
   status.className = "model-status";
   const btn = document.createElement("button");
@@ -274,7 +283,7 @@ function modelEl(m) {
   btn.type = "button";
   btn.addEventListener("click", () => {
     const action = btn.dataset.action;
-    if (action === "delete" && !confirm(t("Delete {label} ({size})?", { label: m.label, size: fmtBytes(m.size) }))) return;
+    if (action === "delete" && !confirm(t("Delete {label} ({size})?", { label: modelLabel(m), size: fmtBytes(m.size) }))) return;
     if (action) modelAction(m.id, action);
   });
   const bar = document.createElement("div");
@@ -305,8 +314,8 @@ function modelEl(m) {
   chunk.append(ends[0], chunkInput, ends[1], chunkValue);
   applyI18n(chunk);
   item.append(name, status, btn, bar, chunk);
-  modelsListEl.appendChild(item);
-  el = { status, bar, fill, btn, chunk, chunkInput };
+  (m.from ? mtModelsListEl : modelsListEl).appendChild(item);
+  el = { item, name, status, bar, fill, btn, chunk, chunkInput };
   modelEls.set(m.id, el);
   return el;
 }
@@ -320,22 +329,27 @@ async function loadModels() {
     console.error("failed to fetch /api/models", e);
     return;
   }
-  // The Local models section only exists when the qwen_asr binary was found.
+  // Qwen rows only when the qwen_asr binary was found.
+  const mt = data.mt || [];
   modelsSection.hidden = !data.available;
+  mtModelsSection.hidden = mt.length === 0;
+  modelsDirEl.hidden = modelsSection.hidden && mtModelsSection.hidden;
   localUnavailable = data.available ? null : { kind: data.unavailable_kind, reason: data.unavailable_reason || "" };
-  if (!data.available) {
-    updateAsrModelHint();  // its wording depends on localUnavailable
-    renderWelcome();
-    return;
-  }
-  for (const m of data.models) modelsById.set(m.id, m);
-  updateAsrModelHint();
+  if (data.available) for (const m of data.models) modelsById.set(m.id, m);
+  updateAsrModelHint();  // its wording depends on localUnavailable
   modelsDirEl.textContent = t("Downloads go to {dir}", { dir: data.data_dir });
+  for (const [id, el] of modelEls) {
+    if (id.startsWith("mt-") && !mt.some((m) => m.id === id)) {
+      el.item.remove();
+      modelEls.delete(id);
+    }
+  }
   let busy = false;
   let changed = false;
   const now = performance.now();
-  for (const m of data.models) {
+  for (const m of [...(data.available ? data.models : []), ...mt]) {
     const el = modelEl(m);
+    el.name.textContent = modelLabel(m);
     const prev = modelPrev.get(m.id);
     if (prev && prev.state !== m.state) changed = true;
     const pct = m.size ? Math.floor((m.done / m.size) * 100) : 0;
@@ -374,7 +388,7 @@ async function loadModels() {
     el.btn.hidden = !action;
     el.btn.dataset.action = action;
     el.btn.textContent = t({ download: m.done > 0 ? "Resume" : "Download", cancel: "Cancel", delete: "Delete" }[action] || "");
-    el.chunk.hidden = m.state !== "ready";
+    el.chunk.hidden = m.state !== "ready" || Boolean(m.from);
     el.chunkInput.setAttribute("aria-label", t("{label}: latency vs. CPU", { label: m.label }));
     modelPrev.set(m.id, { state: m.state, done: m.done, t: now });
   }
@@ -382,8 +396,125 @@ async function loadModels() {
   if (changed) loadBackends();
   if (busy) modelsPollTimer = setTimeout(loadModels, 1000);
   renderWelcome();
+  updateMtHint();
 }
 loadModels();
+
+// Local translation: the models the language pair needs, under the select.
+const mtHintEl = document.getElementById("mt-model-hint");
+const mtHintText = mtHintEl.querySelector("span");
+const mtHintBtn = mtHintEl.querySelector("button");
+const MT_MISSING_STATUS = "download the translation models first";
+let mtRoute = null;  // latest /api/mt-route answer
+let mtRouteSeq = 0;
+
+function langName(code) {
+  try {
+    return new Intl.DisplayNames([document.documentElement.lang], { type: "language" }).of(code) || code;
+  } catch {
+    return code;
+  }
+}
+
+function currentTargetLang() {
+  return (targetLangInput.value || "Chinese (Simplified)").trim();
+}
+
+function mtModelsMissing() {
+  return translateBackendSel.value === "local" && Boolean(mtRoute?.models?.some((m) => m.state !== "ready"));
+}
+
+async function updateMtHint() {
+  if (translateBackendSel.value !== "local") {
+    mtRoute = null;
+    mtHintEl.hidden = true;
+    return;
+  }
+  const seq = ++mtRouteSeq;
+  const q = new URLSearchParams({ source: currentSourceLang(), target: currentTargetLang() });
+  let data;
+  try {
+    data = await (await fetch(`api/mt-route?${q}`)).json();
+  } catch (e) {
+    console.error("failed to fetch /api/mt-route", e);
+    return;
+  }
+  if (seq !== mtRouteSeq) return;  // the pair changed meanwhile
+  mtRoute = data;
+  renderMtHint();
+}
+
+function renderMtHint() {
+  const r = mtRoute;
+  if (!r || translateBackendSel.value !== "local") {
+    mtHintEl.hidden = true;
+    return;
+  }
+  const models = r.models || [];
+  const missing = models.filter((m) => m.state !== "ready");
+  const sum = (list, key) => list.reduce((n, m) => n + m[key], 0);
+  let text;
+  let btn = "";
+  let err = false;
+  let info = false;  // grey: nothing to do
+  if (!r.target) {
+    text = t("No local model translates into “{lang}”.", { lang: currentTargetLang() });
+    err = true;
+  } else if (!r.source) {
+    text = t("No local model translates from {lang}.", { lang: t(currentSourceLang()) });
+    err = true;
+  } else if (!r.models) {
+    text = t("No local models for {src} → {tgt}.", { src: langName(r.source), tgt: langName(r.target) });
+    err = true;
+  } else if (r.source === "auto") {
+    text = t("With Auto-detect, each sentence's language is guessed from its script (Latin script counts as English), and only languages with downloaded models are translated. Pick the source language to download its models.");
+  } else if (models.length === 0) {
+    text = t("Source and target are the same language: captions show the transcript.");
+    info = true;
+  } else {
+    const path = [r.source, ...models.map((m) => m.to)].map(langName).join(" → ");
+    const failed = missing.find((m) => m.state === "error");
+    if (missing.some((m) => m.state === "downloading")) {
+      const size = sum(missing, "size");
+      text = t("Downloading {pct}% of {size}…", { pct: Math.floor((sum(missing, "done") / size) * 100), size: fmtBytes(size) });
+    } else if (failed) {
+      text = t("Download failed: {error}", { error: failed.error });
+      btn = t("Retry");
+      err = true;
+    } else if (missing.length) {
+      text = t("Translation models for {path} ({size})", { path, size: fmtBytes(sum(missing, "size")) });
+      btn = t("Download");
+    } else {
+      text = t("Models from Firefox: {path}", { path });
+      info = true;
+    }
+  }
+  mtHintText.textContent = text;
+  mtHintBtn.textContent = btn;
+  mtHintBtn.hidden = !btn;
+  mtHintEl.classList.toggle("err", err);
+  mtHintEl.classList.toggle("info", info);
+  mtHintEl.hidden = false;
+  if (!mtModelsMissing() && statusMsg[0] === MT_MISSING_STATUS) setStatus("idle");
+}
+
+mtHintBtn.addEventListener("click", async () => {
+  const todo = (mtRoute?.models || []).filter((m) => m.state === "absent" || m.state === "error");
+  const results = await Promise.all(todo.map((m) => fetch(`api/models/${m.id}/download`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  }).then(async (res) => (res.ok ? null : (await res.json().catch(() => ({}))).error || `HTTP ${res.status}`))));
+  const failed = results.find(Boolean);
+  if (failed) alert(failed);
+  loadModels();
+});
+
+let mtHintTimer = null;
+function updateMtHintSoon() {
+  clearTimeout(mtHintTimer);
+  mtHintTimer = setTimeout(updateMtHint, 300);
+}
 
 sceneSeedInput.addEventListener("input", () => {
   localStorage.setItem(LS_SCENE_SEED, sceneSeedInput.value);
@@ -441,7 +572,7 @@ async function generateHintsFromScene() {
     hintStatusEl.textContent = t("Failed: {error}", { error: e.message });
     hintStatusEl.className = "muted err";
   } finally {
-    hintGenerateBtn.disabled = false;
+    applyContextUse();
   }
 }
 
@@ -454,6 +585,7 @@ inputSourceSel.addEventListener("change", () => {
 asrBackendSel.addEventListener("change", () => {
   localStorage.setItem(LS_ASR, asrBackendSel.value);
   updateAsrModelHint();
+  applyContextUse();
   renderWelcome();
 });
 
@@ -463,15 +595,19 @@ function qwenChunkSec(modelId) {
 
 translateBackendSel.addEventListener("change", () => {
   localStorage.setItem(LS_TR, translateBackendSel.value);
+  updateMtHint();
+  applyContextUse();
   renderWelcome();
 });
 
 targetLangInput.addEventListener("input", () => {
   localStorage.setItem(LS_LANG, targetLangInput.value);
+  updateMtHintSoon();
   renderWelcome();
 });
 sourceLangSel.addEventListener("change", () => {
   localStorage.setItem(LS_SRC, sourceLangSel.value);
+  updateMtHint();
   renderWelcome();
   // Keep input synced so flipping into debug mode doesn't lose the choice.
   sourceLangInput.value = sourceLangSel.value;
@@ -483,6 +619,7 @@ sourceLangInput.addEventListener("input", () => {
   if ([...sourceLangSel.options].some(o => o.value === sourceLangInput.value)) {
     sourceLangSel.value = sourceLangInput.value;
   }
+  updateMtHintSoon();
   renderWelcome();
 });
 
@@ -512,18 +649,36 @@ settingsToggleBtn.addEventListener("click", () => {
   document.body.classList.toggle("settings-open", !settingsPanel.hidden);
 });
 
+let settingsLocked = false;
+const contextNoteEl = document.getElementById("context-note");
+
 function lockSettings(locked) {
+  settingsLocked = locked;
   targetLangInput.disabled = locked;
   sourceLangSel.disabled = locked;
   sourceLangInput.disabled = locked;
-  sceneSeedInput.disabled = locked;
-  sceneInput.disabled = locked;
-  glossaryInput.disabled = locked;
   inputSourceSel.disabled = locked;
   asrBackendSel.disabled = locked;
   translateBackendSel.disabled = locked;
   for (const r of modelsListEl.querySelectorAll('input[type="range"]')) r.disabled = locked;
-  hintGenerateBtn.disabled = locked;
+  applyContextUse();
+}
+
+// Grey out the scene/glossary/research rows the picked backends don't use
+// (LLM translators use both, Gemini Live the glossary).
+function applyContextUse() {
+  const tr = translateBackendSel.selectedOptions[0]?.dataset.context === "1";
+  const asr = asrBackendSel.selectedOptions[0]?.dataset.glossary === "1";
+  const uses = { scene: tr, glossary: tr || asr, context: tr || asr };
+  for (const row of document.querySelectorAll("#settings-panel [data-uses]")) {
+    const used = uses[row.dataset.uses];
+    row.classList.toggle("unused", !used);
+    for (const el of row.querySelectorAll("input, textarea, button")) el.disabled = settingsLocked || !used;
+  }
+  contextNoteEl.hidden = tr;
+  contextNoteEl.textContent = asr
+    ? t("The scene summary is only used with LLM translation (Claude, DeepSeek, Gemini, …).")
+    : t("These are only used with LLM translation (Claude, DeepSeek, Gemini, …).");
 }
 
 let ws = null;
@@ -849,6 +1004,11 @@ async function start() {
   // point at the hint under the select instead of failing server-side.
   if (!asrBackendSel.value || asrModelMissing()) {
     setStatus(asrBackendSel.value ? MODEL_MISSING_STATUS : "no speech-to-text backend configured");
+    if (welcomeEl.hidden) openSettings("backends");
+    return;
+  }
+  if (mtModelsMissing()) {
+    setStatus(MT_MISSING_STATUS);
     if (welcomeEl.hidden) openSettings("backends");
     return;
   }
