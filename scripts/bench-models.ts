@@ -7,7 +7,7 @@
 //     sdk = anthropic | deepseek | gemini; no specs = current defaults.
 //     N=12 sets rounds per candidate (single-digit samples are noise).
 //   npx tsx scripts/bench-models.ts hints ["scene description" ...]
-//     models via HINTS_CLAUDE_MODEL / HINTS_GEMINI_MODEL.
+//     every hints backend with a key; models via HINTS_GEMINI_MODEL / HINTS_CLAUDE_MODEL.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
@@ -17,13 +17,12 @@ import {
   DEEPSEEK_BASE_URL,
   DEFAULT_TARGET_LANG,
   GEMINI_API_KEY,
-  HINTS_CLAUDE_MODEL,
-  HINTS_GEMINI_MODEL,
   TRANSLATE_MODEL,
   anthropicThinkingOff,
   getTranslateBackend,
+  listHintsBackends,
 } from "../src/config.js";
-import { generateHintsClaude, generateHintsGemini, type HintsResult } from "../src/hints.js";
+import { generateHints } from "../src/hints.js";
 import { buildTranslationSystemInstruction } from "../src/prompts.js";
 
 const SENTENCES = [
@@ -147,15 +146,13 @@ async function benchTranslate(specs: string[]): Promise<void> {
 }
 
 async function benchHints(scenes: string[]): Promise<void> {
-  const backends: Array<[string, (d: string, s: string) => Promise<HintsResult>]> = [];
-  if (ANTHROPIC_API_KEY) backends.push([`claude ${HINTS_CLAUDE_MODEL}`, generateHintsClaude]);
-  if (GEMINI_API_KEY) backends.push([`gemini ${HINTS_GEMINI_MODEL}`, generateHintsGemini]);
   for (const scene of scenes) {
     console.log(`\n##### ${scene}`);
-    for (const [label, fn] of backends) {
+    for (const b of listHintsBackends()) {
+      const label = `${b.id} ${b.model}`;
       const t0 = performance.now();
       try {
-        const r = await fn(scene, "Japanese");
+        const r = await generateHints(b, scene, "Japanese");
         const entries = r.glossary ? r.glossary.split(",").length : 0;
         // Watch for searches=0 (stale answer) and a max-tokens stop (truncated).
         console.log(`${label}: ${((performance.now() - t0) / 1000).toFixed(1)}s searches=${r.searchesUsed} stop=${r.stopReason} scene=${r.scene.length}ch glossary=${entries} entries`);

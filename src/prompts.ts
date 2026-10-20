@@ -42,26 +42,31 @@ export function buildHintsSystemPrompt(sourceLang: string): string {
     "misheard, and the Gemini recognizer takes it as custom vocabulary, " +
     "so entries MUST be in the audio language.\n\n" +
     "Rules:\n" +
-    "- Search the web when the input refers to a specific real-world " +
-    "thing (concert, show, person, event, anime, sports, technical " +
-    "topic). Don't fabricate; only list what you verify or know.\n" +
-    "- For generic scenarios where research adds nothing, just answer " +
-    "from training.\n" +
+    // "Even when you feel confident": otherwise models at lower effort
+    // answer from stale training data.
+    "- When the input names a specific real-world thing (concert, tour, " +
+    "show, person, event, anime, game, sports, conference), search the " +
+    "web before answering, even when you feel confident: line-ups, " +
+    "dates, venues and recent names change after your training. Don't " +
+    "fabricate.\n" +
+    "- Only a generic scenario with nothing specific to look up can be " +
+    "answered from training.\n" +
     "- GLOSSARY: 30–100 entries, most distinctive proper nouns first.\n" +
     "- SCENE: concise. Skip generic stuff. Include things that affect " +
     "translation register.\n\n" +
-    "Output format (use the exact delimiters, both blocks required, no " +
+    "Output format (use the exact tags, both blocks required, no " +
     "other text):\n" +
-    "[SCENE]\n<1–3 sentence scene summary>\n[/SCENE]\n" +
-    `[GLOSSARY]\n<comma-separated terms${glossaryLangHint}>\n[/GLOSSARY]\n`
+    "<scene>\n1–3 sentence scene summary\n</scene>\n" +
+    `<glossary>\ncomma-separated terms${glossaryLangHint}\n</glossary>\n`
   );
 }
 
-// Extract [SCENE] and [GLOSSARY] blocks from a hints model response. Falls back
-// to treating the whole text as glossary when neither delimiter block parses.
+// Extract <scene> and <glossary> blocks from a hints model response. Falls back
+// to treating the whole text as glossary when neither block parses. A missing
+// closing tag (DeepSeek drops them) ends the block at the next tag or the end.
 export function parseHintsResponse(raw: string): { scene: string; glossary: string } {
-  const sceneM = /\[SCENE\]\s*([\s\S]*?)\s*\[\/SCENE\]/.exec(raw);
-  const glossM = /\[GLOSSARY\]\s*([\s\S]*?)\s*\[\/GLOSSARY\]/.exec(raw);
+  const sceneM = /<scene>\s*([\s\S]*?)\s*(?:<\/scene>|<glossary>|$)/i.exec(raw);
+  const glossM = /<glossary>\s*([\s\S]*?)\s*(?:<\/glossary>|<scene>|$)/i.exec(raw);
   let scene = sceneM ? sceneM[1].trim() : "";
   let glossary = glossM ? glossM[1].trim() : "";
   if (!scene && !glossary) glossary = raw;

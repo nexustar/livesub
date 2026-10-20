@@ -184,11 +184,41 @@ export function anthropicThinkingOff(model: string): AnthropicThinkingOff {
   return model.includes("claude-sonnet-5-5") ? { type: "between_tools" } : { type: "disabled" };
 }
 
-// /api/hints (scene-seed -> glossary research) supports two backends. Gemini is
-// preferred when GEMINI_API_KEY is set. Claude is the fallback.
+// /api/hints (scene-seed -> glossary research): one backend per search engine,
+// picked in the UI. HINTS_BACKEND sets the default; "auto" takes the first
+// available, in registry order.
 export const HINTS_BACKEND = env("HINTS_BACKEND", "auto").trim().toLowerCase();
 export const HINTS_CLAUDE_MODEL = env("HINTS_CLAUDE_MODEL", "claude-sonnet-5-5");
 export const HINTS_GEMINI_MODEL = env("HINTS_GEMINI_MODEL", "gemini-2.5-flash");
+
+export interface HintsBackend {
+  id: string;
+  label: string;
+  // "anthropic": the web_search server tool (DeepSeek's compatible endpoint
+  // runs its own engine behind it). "gemini": google_search grounding.
+  sdk: "anthropic" | "gemini";
+  model: string;
+  api_key_env: string;
+  base_url?: string;
+  // output_config.effort (anthropic SDK).
+  effort?: "low" | "medium" | "high";
+}
+
+export const HINTS_BACKENDS: HintsBackend[] = [
+  { id: "gemini", label: "Google Search (Gemini)", sdk: "gemini", model: HINTS_GEMINI_MODEL, api_key_env: "GEMINI_API_KEY" },
+  // low skips searches it needs.
+  { id: "claude", label: "Claude web search", sdk: "anthropic", model: HINTS_CLAUDE_MODEL, api_key_env: "ANTHROPIC_API_KEY", effort: "medium" },
+  {
+    id: "deepseek",
+    label: "DeepSeek web search",
+    sdk: "anthropic",
+    model: "deepseek-flash",
+    api_key_env: "DEEPSEEK_API_KEY",
+    base_url: DEEPSEEK_BASE_URL,
+    // Thinking off skips searches it needs; higher effort is slower.
+    effort: "low",
+  },
+];
 
 export const DEFAULT_TARGET_LANG = "Chinese (Simplified)";
 export const HISTORY_PAIRS = 5;
@@ -475,12 +505,15 @@ export function listAsrBackends(): Array<{ id: string; label: string; ready: boo
   return out;
 }
 
-// Return 'gemini' / 'claude' / null based on env override and keys. Default
-// priority gemini > claude.
-export function pickHintsBackend(): "gemini" | "claude" | null {
-  if (HINTS_BACKEND === "gemini") return GEMINI_API_KEY ? "gemini" : null;
-  if (HINTS_BACKEND === "claude") return ANTHROPIC_API_KEY ? "claude" : null;
-  if (GEMINI_API_KEY) return "gemini";
-  if (ANTHROPIC_API_KEY) return "claude";
-  return null;
+// Hints backends whose API key is set, in registry order.
+export function listHintsBackends(): HintsBackend[] {
+  return HINTS_BACKENDS.filter((b) => Boolean(process.env[b.api_key_env]));
+}
+
+// The requested backend, or with none requested the default. An unavailable
+// request is null, not a silent fallback to another engine.
+export function pickHintsBackend(requested?: string): HintsBackend | null {
+  const avail = listHintsBackends();
+  if (requested) return avail.find((b) => b.id === requested) ?? null;
+  return avail.find((b) => b.id === HINTS_BACKEND) ?? avail[0] ?? null;
 }

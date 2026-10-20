@@ -50,6 +50,10 @@ livesub（它从当前目录读取 `.env`）。
 模型。它逐句独立翻译，不使用场景说明和术语表，人名常常译错。选择 **自动检测**
 时，按文字判断每句的语言，拉丁字母一律当作英语。
 
+**调研**（设置 → 会话）根据你输入的主题做网页搜索，自动填写场景说明和术语表。
+在按钮旁边选择搜索引擎：通过 Gemini 的 Google 搜索（`GEMINI_API_KEY`）、Claude
+的网页搜索（`ANTHROPIC_API_KEY`）或 DeepSeek 的网页搜索（`DEEPSEEK_API_KEY`）。
+
 ## 配置
 
 `.env`（API key 和其他覆盖项）和 `livesub.toml`（额外的翻译后端）都从启动

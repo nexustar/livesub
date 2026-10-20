@@ -22,6 +22,7 @@ const inputSourceSel = document.getElementById("input-source");
 const asrBackendSel = document.getElementById("asr-backend");
 const translateBackendSel = document.getElementById("translate-backend");
 const hintGenerateBtn = document.getElementById("hint-generate");
+const hintBackendSel = document.getElementById("hint-backend");
 const hintStatusEl = document.getElementById("hint-status");
 const vuFillEl = document.getElementById("vu-fill");
 const badgeMicEl = document.getElementById("badge-mic");
@@ -52,6 +53,7 @@ const LS_INPUT = "livesub.inputSource";
 const LS_ASR = "livesub.asrBackend";
 const LS_TR = "livesub.translateBackend";
 const LS_SCENE_SEED = "livesub.sceneSeed";
+const LS_HINTS = "livesub.hintsBackend";
 const LS_SCENE = "livesub.scene";
 const LS_GLOSSARY = "livesub.glossary";
 const LS_DEBUG = "livesub.debugMode";
@@ -176,10 +178,17 @@ async function loadBackends() {
   applyContextUse();
   // Hide the topic/Research row entirely if no hints backend is configured.
   // Manually-filled Scene + Glossary fields stay — they work independently.
-  if (!data.hints_available) {
+  const hints = data.hints || [];
+  if (!hints.length) {
     const row = document.getElementById("scene-seed-row");
     if (row) row.hidden = true;
   }
+  // Search engine: the saved pick if still available, else the server default.
+  const savedHints = localStorage.getItem(LS_HINTS);
+  populateBackendSelect(hintBackendSel, hints,
+    hints.some(b => b.id === savedHints) ? savedHints : data.hints_default);
+  // A choice of one isn't a choice.
+  hintBackendSel.hidden = hints.length < 2;
   renderWelcome();
 }
 loadBackends();
@@ -542,6 +551,7 @@ async function generateHintsFromScene() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         description: desc,
+        backend: hintBackendSel.value || undefined,
         // Pin glossary language to source_lang: it is matched against the
         // source transcript (translator, Gemini custom vocabulary), so terms
         // in another language are wasted. "auto" leaves Claude to infer from
@@ -560,9 +570,7 @@ async function generateHintsFromScene() {
     localStorage.setItem(LS_GLOSSARY, glossary);
     const n = data.searches_used;
     const searches = !n ? "" : n === 1 ? t(" (1 web search)") : t(" ({n} web searches)", { n });
-    const via = data.backend
-      ? t(" via {backend}", { backend: data.backend.charAt(0).toUpperCase() + data.backend.slice(1) })
-      : "";
+    const via = data.label ? t(" via {backend}", { backend: t(data.label) }) : "";
     hintStatusEl.textContent = t(
       "Generated{via}: scene ({scene} chars) + glossary ({glossary} chars){searches}. Edit below as needed.",
       { via, scene: scene.length, glossary: glossary.length, searches });
@@ -577,6 +585,9 @@ async function generateHintsFromScene() {
 }
 
 hintGenerateBtn.addEventListener("click", generateHintsFromScene);
+hintBackendSel.addEventListener("change", () => {
+  localStorage.setItem(LS_HINTS, hintBackendSel.value);
+});
 
 inputSourceSel.addEventListener("change", () => {
   localStorage.setItem(LS_INPUT, inputSourceSel.value);

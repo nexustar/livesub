@@ -23,11 +23,12 @@ import {
   isLoopbackHost,
   listAsrBackends,
   listTranslateBackends,
+  listHintsBackends,
   pickHintsBackend,
   qwenBinAvailable,
   qwenUnavailable,
 } from "./config.js";
-import { generateHintsClaude, generateHintsGemini } from "./hints.js";
+import { generateHints } from "./hints.js";
 import { cancelDownload, deleteModel, listModels, mtRouteModels, startDownload } from "./models.js";
 import { mtLangCode } from "./mt.js";
 import { Pipeline } from "./pipeline.js";
@@ -96,20 +97,23 @@ function readBody(req: IncomingMessage, maxBytes = 1 << 20): Promise<string> {
 // ---------- /api/hints ----------
 
 async function handleHints(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const backend = pickHintsBackend();
-  if (backend === null) {
-    sendJson(res, 500, {
-      error:
-        "Hint generation requires GEMINI_API_KEY or ANTHROPIC_API_KEY. Set one in .env and restart, " +
-        "or fill Scene/Glossary manually below.",
-    });
-    return;
-  }
   let body: Record<string, unknown>;
   try {
     body = JSON.parse(await readBody(req));
   } catch {
     sendJson(res, 400, { error: "invalid JSON body" });
+    return;
+  }
+  // The search engine picked in the UI; absent → the server default.
+  const requested = String(body.backend ?? "").trim();
+  const backend = pickHintsBackend(requested || undefined);
+  if (backend === null) {
+    sendJson(res, requested ? 400 : 500, {
+      error: requested
+        ? `hints backend ${JSON.stringify(requested)} is not available (unknown, or its API key isn't set)`
+        : "Hint generation requires GEMINI_API_KEY, ANTHROPIC_API_KEY or DEEPSEEK_API_KEY. Set one in .env and restart, " +
+          "or fill Scene/Glossary manually below.",
+    });
     return;
   }
   const description = String(body.description ?? "").trim();
@@ -123,11 +127,11 @@ async function handleHints(req: IncomingMessage, res: ServerResponse): Promise<v
   }
   const sourceLang = String(body.source_lang ?? "").trim();
 
-  log.info(`generating hints via ${backend} for scene: ${JSON.stringify(description.slice(0, 100))} (source_lang=${JSON.stringify(sourceLang || "auto")})`);
+  log.info(`generating hints via ${backend.id} (${backend.model}) for scene: ${JSON.stringify(description.slice(0, 100))} (source_lang=${JSON.stringify(sourceLang || "auto")})`);
   try {
-    const result = backend === "gemini" ? await generateHintsGemini(description, sourceLang) : await generateHintsClaude(description, sourceLang);
+    const result = await generateHints(backend, description, sourceLang);
     log.info(
-      `hints generated via ${backend}: scene=${result.scene.length}ch glossary=${result.glossary.length}ch ` +
+      `hints generated via ${backend.id}: scene=${result.scene.length}ch glossary=${result.glossary.length}ch ` +
         `${result.searchesUsed} web searches stop=${result.stopReason}`,
     );
     sendJson(res, 200, {
@@ -135,11 +139,12 @@ async function handleHints(req: IncomingMessage, res: ServerResponse): Promise<v
       glossary: result.glossary,
       searches_used: result.searchesUsed,
       model: result.model,
-      backend,
+      backend: backend.id,
+      label: backend.label,
     });
   } catch (e) {
-    log.exception(`hint generation via ${backend} failed`, e);
-    sendJson(res, 502, { error: e instanceof Error ? e.message : String(e), backend });
+    log.exception(`hint generation via ${backend.id} failed`, e);
+    sendJson(res, 502, { error: e instanceof Error ? e.message : String(e), backend: backend.id });
   }
 }
 
@@ -233,8 +238,10 @@ const httpServer = createServer((req, res) => {
     sendJson(res, 200, {
       asr: listAsrBackends(),
       translate: listTranslateBackends(),
-      // Whether /api/hints can serve a request (any usable hints backend).
-      hints_available: pickHintsBackend() !== null,
+      // Search engines /api/hints can use (API key set); the default first
+      // pick is hints_default. Empty → the UI hides the Research row.
+      hints: listHintsBackends().map((b) => ({ id: b.id, label: b.label })),
+      hints_default: pickHintsBackend()?.id ?? null,
     });
     return;
   }

@@ -58,6 +58,11 @@ glossary, and names often come out wrong. With **Auto-detect**, a
 sentence's language is guessed from its script, and Latin script is taken
 as English.
 
+**Research** (Settings → Session) fills in the scene summary and glossary
+from a web search on a topic you type. Pick the search engine next to the
+button: Google Search through Gemini (`GEMINI_API_KEY`), Claude's web
+search (`ANTHROPIC_API_KEY`) or DeepSeek's (`DEEPSEEK_API_KEY`).
+
 ## Configuration
 
 `.env` (API keys and overrides) and `livesub.toml` (extra translation

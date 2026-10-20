@@ -79,6 +79,10 @@ const LOCALES = {
     "Type a topic first.": "请先填写调研主题。",
     "Researching (may take 5–15s)…": "正在调研（需要 5–15 秒）…",
     " via {backend}": "（{backend}）",
+    "Search engine": "搜索引擎",
+    "Google Search (Gemini)": "Google 搜索（Gemini）",
+    "Claude web search": "Claude 网页搜索",
+    "DeepSeek web search": "DeepSeek 网页搜索",
     " (1 web search)": "（1 次网页搜索）",
     " ({n} web searches)": "（{n} 次网页搜索）",
     "Generated{via}: scene ({scene} chars) + glossary ({glossary} chars){searches}. Edit below as needed.":

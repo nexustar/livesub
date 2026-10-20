@@ -339,6 +339,11 @@ body.settings-open #history { display: none; }
   flex: 1;
   min-width: 0;
 }
+.hint-scene-row select {
+  flex: none;
+  max-width: 40%;
+  font-size: 12px;
+}
 .hint-scene-row button {
   white-space: nowrap;
   font-size: 12px;
