@@ -199,6 +199,8 @@ export interface PipelineOpts {
   translateBackend: string;
   // qwen-asr --stream-chunk-sec: lower = lower latency, more CPU.
   qwenChunkSec: number;
+  // quickasr --device: cpu, or a GPU from --list-devices (picked in Settings).
+  qwenDevice: string;
 }
 
 export class Pipeline {
@@ -211,6 +213,7 @@ export class Pipeline {
   private readonly asrBackend: string;
   private readonly translateBackend: string;
   private readonly qwenChunkSec: number;
+  private readonly qwenDevice: string;
 
   private claude: Anthropic | null = null;
   private openaiClient: OpenAI | null = null;
@@ -261,6 +264,7 @@ export class Pipeline {
     this.asrBackend = opts.asrBackend;
     this.translateBackend = opts.translateBackend;
     this.qwenChunkSec = opts.qwenChunkSec;
+    this.qwenDevice = opts.qwenDevice;
     if (this.translateBackend === "local") {
       const src = this.sourceLang.trim().toLowerCase();
       this.mtSource = src && src !== "auto" ? mtLangCode(this.sourceLang) : null;
@@ -398,6 +402,8 @@ export class Pipeline {
     // Chunk size is the user's latency / CPU trade-off (Settings slider). Too
     // small for the machine and processing falls behind, so latency grows.
     qwenCmd.push("--stream-chunk-sec", String(this.qwenChunkSec));
+    // The device is the user's pick next to the slider; cpu is the binary's default.
+    if (this.qwenDevice !== "cpu") qwenCmd.push("--device", this.qwenDevice);
     // Committed text and the provisional tail, one JSON object per line.
     qwenCmd.push("--stream-json");
 
@@ -465,7 +471,16 @@ export class Pipeline {
         for (let nl = errPending.indexOf("\n"); nl >= 0; nl = errPending.indexOf("\n")) {
           const line = errPending.slice(0, nl).trim();
           errPending = errPending.slice(nl + 1);
-          if (line) log.info(`${label}: ${line}`);
+          if (!line) continue;
+          log.info(`${label}: ${line}`);
+          // The GPU ran out of memory (or is gone): quickasr exits. Say which
+          // setting to change rather than leave the captions silent.
+          if (/GPU computation failed|no device named|no device \S+$/.test(line)) {
+            void this.safeSendJson({
+              type: "error",
+              message: `Local ASR on ${this.qwenDevice} failed (${line}). Pick another device for this model in Settings.`,
+            });
+          }
         }
       });
     }

@@ -20,6 +20,7 @@ import {
   QWEN_CHUNK_SEC_MAX,
   QWEN_CHUNK_SEC_MIN,
   STATIC_DIR,
+  qwenDevices,
   isLoopbackHost,
   listAsrBackends,
   listTranslateBackends,
@@ -397,8 +398,11 @@ function startSession(ws: WebSocket, firstData: Buffer, preConfigAudio: Buffer[]
 
   const chunk = Number(cfg.qwen_chunk_sec);
   const qwenChunkSec = Number.isFinite(chunk) && chunk >= QWEN_CHUNK_SEC_MIN && chunk <= QWEN_CHUNK_SEC_MAX ? chunk : QWEN_CHUNK_SEC_DEFAULT;
+  // A device the binary listed; anything else (gone since, or stale) is cpu.
+  const wantDevice = String(cfg.qwen_device ?? "cpu");
+  const qwenDevice = qwenDevices().find((d) => d.name.toLowerCase() === wantDevice.toLowerCase())?.name ?? "cpu";
 
-  const pipeline = new Pipeline({ clientWs: ws, gemini, targetLang, sourceLang, scene, glossary, asrBackend, translateBackend, qwenChunkSec });
+  const pipeline = new Pipeline({ clientWs: ws, gemini, targetLang, sourceLang, scene, glossary, asrBackend, translateBackend, qwenChunkSec, qwenDevice });
 
   // Flush any audio that arrived before the pipeline existed, then run.
   for (const buf of preConfigAudio) pipeline.onAudio(buf);

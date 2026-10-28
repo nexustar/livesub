@@ -4,6 +4,7 @@
 // working directory, bundled assets (static/) against the package root — see
 // ROOT and PKG_DIR below.
 
+import { execFileSync } from "node:child_process";
 import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
@@ -278,19 +279,22 @@ export function isLoopbackHost(h: string): boolean {
   return h === "localhost" || h === "::1" || /^127\.\d+\.\d+\.\d+$/.test(h);
 }
 
-// Prebuilt qwen_asr from the qwen-asr npm package (an optional dependency:
-// npm skips it where it has no binary, e.g. Windows on arm64). On failure, bin is ""
-// and reason says why, for the UI.
+// Prebuilt binary from the quickasr npm package (an optional dependency: npm
+// skips it where it has no binary, e.g. Windows on arm64), or from qwen-asr,
+// its name before the rename. On failure, bin is "" and reason says why, for
+// the UI.
 function packagedQwenBin(): { bin: string; reason: string } {
-  try {
-    const { binaryPath } = createRequire(import.meta.url)("qwen-asr") as { binaryPath(): string };
-    return { bin: binaryPath(), reason: "" };
-  } catch (e) {
-    if ((e as { code?: string }).code === "MODULE_NOT_FOUND") {
-      return { bin: "", reason: `no prebuilt qwen-asr for ${process.platform}-${process.arch}` };
+  const req = createRequire(import.meta.url);
+  for (const pkg of ["quickasr", "qwen-asr"]) {
+    try {
+      const { binaryPath } = req(pkg) as { binaryPath(): string };
+      return { bin: binaryPath(), reason: "" };
+    } catch (e) {
+      if ((e as { code?: string }).code === "MODULE_NOT_FOUND") continue;
+      return { bin: "", reason: e instanceof Error ? e.message : String(e) };
     }
-    return { bin: "", reason: e instanceof Error ? e.message : String(e) };
   }
+  return { bin: "", reason: `no prebuilt quickasr for ${process.platform}-${process.arch}` };
 }
 const QWEN_PACKAGED = packagedQwenBin();
 
@@ -299,12 +303,40 @@ export const QWEN_CHUNK_SEC_MIN = 1;
 export const QWEN_CHUNK_SEC_MAX = 8;
 export const QWEN_CHUNK_SEC_DEFAULT = 2;
 
-// qwen-asr — local C inference subprocess. QWEN_ASR_BIN wins, then the
-// packaged binary, then qwen_asr on PATH.
-export const QWEN_BIN = env("QWEN_ASR_BIN") || QWEN_PACKAGED.bin || "qwen_asr";
+// quickasr — local C inference subprocess. QWEN_ASR_BIN wins, then the
+// packaged binary, then quickasr on PATH.
+export const QWEN_BIN = env("QWEN_ASR_BIN") || QWEN_PACKAGED.bin || "quickasr";
 // Why the packaged binary can't be used, when it can't (shown when no qwen_asr
 // is found at all).
 export const QWEN_PACKAGED_REASON = QWEN_PACKAGED.reason;
+
+// Devices the qwen binary can run on (--device), for the per-model picker:
+// always cpu, plus GPUs in a `make gpu` build. Asked once; a binary without
+// `--list-devices json` (older, or not found) gives cpu only.
+export interface QwenDevice {
+  name: string;
+  description: string;
+  type: string;
+}
+let qwenDeviceList: QwenDevice[] | null = null;
+export function qwenDevices(): QwenDevice[] {
+  if (qwenDeviceList) return qwenDeviceList;
+  qwenDeviceList = [{ name: "cpu", description: "CPU", type: "cpu" }];
+  try {
+    const out = execFileSync(resolveBin(QWEN_BIN), ["--list-devices", "json"], {
+      encoding: "utf8",
+      timeout: 15000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const list = JSON.parse(out) as QwenDevice[];
+    if (Array.isArray(list) && list.some((d) => d.name === "cpu")) {
+      qwenDeviceList = list.map((d) => ({ name: String(d.name), description: String(d.description), type: String(d.type) }));
+    }
+  } catch {
+    // cpu only
+  }
+  return qwenDeviceList;
+}
 
 // voxtral.c — local C inference of Mistral Voxtral Realtime 4B.
 export const VOXTRAL_BIN = env("VOXTRAL_BIN", "voxtral");

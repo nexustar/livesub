@@ -441,6 +441,16 @@ body.settings-open #history { display: none; }
   grid-column: 1 / -1;
   margin-top: 8px;
 }
+#settings-panel .model-device {
+  flex: none;
+  width: auto;
+  max-width: 14em;
+  margin-left: 6px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
 .slider-value {
   min-width: 3.2em;
   color: #ddd;

@@ -31,7 +31,7 @@ livesub（它从当前目录读取 `.env`）。
 
 | 语音识别 | 配置 |
 |---|---|
-| Qwen3-ASR 0.6B / 1.7B（本地） | 在页面中下载；1.7B 更准确，但需要性能较好的电脑 |
+| Qwen3-ASR 0.6B / 1.7B（本地） | 在页面中下载；1.7B 更准确，但需要性能较好的电脑。每个模型的延迟滑块旁边可以选择 CPU 或 GPU（Apple Silicon 上是 Metal，Linux 和 Windows 上是 Vulkan） |
 | Qwen 云端 | `DASHSCOPE_API_KEY`（有背景音乐时最好的云端选项） |
 | OpenAI Realtime | `OPENAI_API_KEY`（干净人声效果最好） |
 | Gemini Live | `GEMINI_API_KEY` |

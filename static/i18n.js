@@ -126,6 +126,7 @@ const LOCALES = {
     "Delete": "删除",
     "Delete {label} ({size})?": "删除 {label}（{size}）？",
     "{label}: latency vs. CPU": "{label}：延迟与 CPU 占用",
+    "{label}: device": "{label}：运行设备",
     "Lower latency": "延迟更低",
     "Lower CPU": "CPU 更省",
     // Local translation
