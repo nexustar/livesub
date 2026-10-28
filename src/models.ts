@@ -12,7 +12,7 @@ import { PassThrough, Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createZstdDecompress } from "node:zlib";
 
-import { DATA_DIR, HF_ENDPOINT, MT_ENDPOINT, QWEN_MODELS, qwenModel, qwenModelDir, qwenModelReady, qwenUnavailable } from "./config.js";
+import { DATA_DIR, HF_ENDPOINT, MT_ENDPOINT, QWEN_MODELS, qwenDevices, qwenModel, qwenModelDir, qwenModelReady, qwenUnavailable } from "./config.js";
 import { mtModelById, mtModelDir, mtModelId, mtModelReady, mtRoute } from "./mt.js";
 import { MT_MODELS, MT_RECORDS_URL, type MtModel } from "./mt-models.js";
 import { log } from "./util.js";
@@ -118,6 +118,8 @@ export function listModels() {
     unavailable_kind: unavailable?.kind,
     unavailable_reason: unavailable?.reason,
     data_dir: DATA_DIR,
+    // What the per-model device picker offers.
+    devices: unavailable ? [] : qwenDevices(),
     models: QWEN_MODELS.map((m) => {
       const base = { id: m.id, label: m.label, size: totalSize(m), dir: qwenModelDir(m) };
       if (m.envDir) {

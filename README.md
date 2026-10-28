@@ -36,7 +36,7 @@ Choose them in **Settings → Backends**.
 
 | Speech-to-text | Setup |
 |---|---|
-| Qwen3-ASR 0.6B / 1.7B (local) | download from the page; 1.7B is more accurate but needs a fast computer |
+| Qwen3-ASR 0.6B / 1.7B (local) | download from the page; 1.7B is more accurate but needs a fast computer. Next to each model's latency slider, pick CPU or a GPU (Metal on Apple Silicon, Vulkan on Linux and Windows) |
 | Qwen Cloud | `DASHSCOPE_API_KEY` (best cloud option over music) |
 | OpenAI Realtime | `OPENAI_API_KEY` (best on clean speech) |
 | Gemini Live | `GEMINI_API_KEY` |

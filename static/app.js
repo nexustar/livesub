@@ -61,6 +61,7 @@ const LS_FONT_LARGE = "livesub.fontLarge";
 const LS_SETTINGS_TAB = "livesub.settingsTab";
 // Per local model, suffixed with its id (qwen-small / qwen-large).
 const LS_QWEN_CHUNK = "livesub.qwenChunkSec.";
+const LS_QWEN_DEVICE = "livesub.qwenDevice.";
 
 targetLangInput.value = localStorage.getItem(LS_LANG) || "Chinese (Simplified)";
 // Source-lang has two visible elements (see HTML): a <select> for normal
@@ -320,11 +321,16 @@ function modelEl(m) {
     s.dataset.i18n = label;
     return s;
   });
-  chunk.append(ends[0], chunkInput, ends[1], chunkValue);
+  // Where it runs: cpu, or a GPU the binary listed. The user's pick, as the
+  // GPU is not always faster (a busy or weak one) and can run out of memory.
+  const device = document.createElement("select");
+  device.className = "model-device";
+  device.addEventListener("change", () => localStorage.setItem(LS_QWEN_DEVICE + m.id, device.value));
+  chunk.append(ends[0], chunkInput, ends[1], chunkValue, device);
   applyI18n(chunk);
   item.append(name, status, btn, bar, chunk);
   (m.from ? mtModelsListEl : modelsListEl).appendChild(item);
-  el = { item, name, status, bar, fill, btn, chunk, chunkInput };
+  el = { item, name, status, bar, fill, btn, chunk, chunkInput, device };
   modelEls.set(m.id, el);
   return el;
 }
@@ -399,6 +405,7 @@ async function loadModels() {
     el.btn.textContent = t({ download: m.done > 0 ? "Resume" : "Download", cancel: "Cancel", delete: "Delete" }[action] || "");
     el.chunk.hidden = m.state !== "ready" || Boolean(m.from);
     el.chunkInput.setAttribute("aria-label", t("{label}: latency vs. CPU", { label: m.label }));
+    if (!m.from) fillDevices(el.device, data.devices || [], m);
     modelPrev.set(m.id, { state: m.state, done: m.done, t: now });
   }
   // A model that finished (or was deleted) changes the ASR dropdown.
@@ -602,6 +609,32 @@ asrBackendSel.addEventListener("change", () => {
 
 function qwenChunkSec(modelId) {
   return localStorage.getItem(LS_QWEN_CHUNK + modelId) || "2";
+}
+
+function qwenDevice(modelId) {
+  return localStorage.getItem(LS_QWEN_DEVICE + modelId) || "cpu";
+}
+
+// Rebuilt only when the device list changes, so an open dropdown survives the
+// download poll. A saved device no longer listed shows as cpu.
+function fillDevices(select, devices, m) {
+  const sig = devices.map((d) => d.name).join("\n");
+  if (select.dataset.sig !== sig) {
+    select.dataset.sig = sig;
+    select.replaceChildren(...devices.map((d) => {
+      const o = document.createElement("option");
+      o.value = d.name;
+      // The device name only to tell two identical GPUs apart.
+      const twin = devices.filter((x) => x.description === d.description).length > 1;
+      o.textContent = d.type === "cpu" ? "CPU" : `GPU · ${d.description}${twin ? ` (${d.name})` : ""}`;
+      o.title = d.name;
+      return o;
+    }));
+  }
+  const want = qwenDevice(m.id);
+  select.value = devices.some((d) => d.name === want) ? want : "cpu";
+  select.hidden = devices.length < 2;
+  select.setAttribute("aria-label", t("{label}: device", { label: m.label }));
 }
 
 translateBackendSel.addEventListener("change", () => {
@@ -1123,6 +1156,7 @@ function connect() {
       asr_backend: asrBackendSel.value || "gemini",
       translate_backend: translateBackendSel.value || "gemini",
       qwen_chunk_sec: Number(qwenChunkSec(asrBackendSel.value)),
+      qwen_device: qwenDevice(asrBackendSel.value),
     }));
     // Tag <body> so CSS can hide the redundant transcript line in
     // passthrough mode (when we mirror src into the translation slot).
