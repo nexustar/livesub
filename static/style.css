@@ -198,6 +198,7 @@ body.settings-open #caption-stack,
 body.settings-open #history { display: none; }
 
 .settings-form {
+  position: relative;
   width: 100%;
   max-width: 680px;
   min-height: 0;
@@ -210,10 +211,24 @@ body.settings-open #history { display: none; }
   padding: 6px 20px 20px;
 }
 
+#settings-close {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 1;
+  padding: 6px 9px;
+  background: transparent;
+  color: #888;
+  font-size: 13px;
+  line-height: 1;
+}
+#settings-close:hover { background: #1a1a1a; color: #ddd; }
+
 .settings-tabs {
   flex: none;
   display: flex;
   gap: 4px;
+  padding-right: 32px;
   border-bottom: 1px solid #222;
   margin-bottom: 18px;
   /* overflow-y: hidden, or the buttons' -1px margin adds a vertical bar.

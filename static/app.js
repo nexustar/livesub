@@ -693,6 +693,19 @@ settingsToggleBtn.addEventListener("click", () => {
   document.body.classList.toggle("settings-open", !settingsPanel.hidden);
 });
 
+function closeSettings() {
+  if (!settingsPanel.hidden) settingsToggleBtn.click();
+}
+document.getElementById("settings-close").addEventListener("click", closeSettings);
+// The empty space around the card.
+settingsPanel.addEventListener("click", (e) => {
+  if (e.target === settingsPanel) closeSettings();
+});
+// Not while an IME is composing: there Esc cancels the composition.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !e.isComposing) closeSettings();
+});
+
 let settingsLocked = false;
 const contextNoteEl = document.getElementById("context-note");
 

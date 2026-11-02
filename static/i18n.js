@@ -17,6 +17,7 @@ const LOCALES = {
     "Tab": "标签页",
     "audio level": "音量",
     "Settings": "设置",
+    "Close": "关闭",
     "Show captions in an always-on-top window": "在置顶小窗中显示字幕",
     "Pop out": "弹出",
     "Clear": "清空",
