@@ -363,8 +363,8 @@ export class Pipeline {
       await this.safeSendJson({
         type: "error",
         message:
-          `qwen_asr binary not found (looked for ${JSON.stringify(QWEN_BIN)}). ` +
-          "Build from https://github.com/nexustar/qwen-asr and set QWEN_ASR_BIN env var.",
+          `quickasr binary not found (looked for ${JSON.stringify(QWEN_BIN)}). ` +
+          "Build from https://github.com/nexustar/quickasr and set QWEN_ASR_BIN env var.",
       });
       return;
     }
@@ -374,8 +374,8 @@ export class Pipeline {
       await this.safeSendJson({
         type: "error",
         message: model?.envDir
-          ? `qwen-asr model dir not found (${model.envName}=${JSON.stringify(modelDir)}).`
-          : `qwen-asr model for ${this.asrBackend} is not downloaded — download it in Settings → Backends.`,
+          ? `Qwen model dir not found (${model.envName}=${JSON.stringify(modelDir)}).`
+          : `Qwen model for ${this.asrBackend} is not downloaded — download it in Settings → Backends.`,
       });
       return;
     }
@@ -408,7 +408,7 @@ export class Pipeline {
     qwenCmd.push("--stream-json");
 
     const cmd = withLineBuffering(qwenCmd);
-    log.info(`starting qwen-asr: ${cmd.join(" ")}`);
+    log.info(`starting quickasr: ${cmd.join(" ")}`);
     await this.safeSendJson({ type: "asr_session", state: "open" });
 
     await this.runSubprocessAsr(cmd, "qwen", true);

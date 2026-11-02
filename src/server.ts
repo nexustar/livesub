@@ -442,14 +442,14 @@ if (asrAvail.length === 0) {
       ? "no ASR backend available yet — download a local model in Settings → Backends, " +
           "or set one of DASHSCOPE_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY"
       : "no ASR backend available — set one of DASHSCOPE_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY, " +
-          "or build qwen-asr and set QWEN_ASR_BIN, then restart",
+          "or build quickasr and set QWEN_ASR_BIN, then restart",
   );
 } else {
   log.info(`ASR backends available: ${asrAvail.map((b) => b.id).join(", ")}`);
 }
 log.info(`data dir: ${DATA_DIR}`);
 const qwenMissing = qwenUnavailable();
-if (qwenMissing) log.info(`local qwen-asr unavailable: ${qwenMissing.reason}`);
+if (qwenMissing) log.info(`local quickasr unavailable: ${qwenMissing.reason}`);
 
 // ws re-emits listen errors (port taken, bad host); report them in one line.
 wss.on("error", (e: NodeJS.ErrnoException) => {

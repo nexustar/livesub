@@ -490,7 +490,7 @@ export function qwenBinAvailable(): boolean {
 export function qwenUnavailable(): { kind: "config" | "platform"; reason: string } | null {
   if (qwenBinAvailable()) return null;
   if (process.env.QWEN_ASR_BIN) return { kind: "config", reason: `QWEN_ASR_BIN not found: ${process.env.QWEN_ASR_BIN}` };
-  return { kind: "platform", reason: QWEN_PACKAGED_REASON || "qwen_asr not found" };
+  return { kind: "platform", reason: QWEN_PACKAGED_REASON || "quickasr not found" };
 }
 
 // An external dir is trusted as long as it exists; a managed one must hold

@@ -31,7 +31,7 @@ jobs:
       - run: npm run typecheck
 
       # Install the tarball into an empty app as a user would, start it, and
-      # check the server is up with the qwen-asr binary found.
+      # check the server is up with the quickasr binary found.
       - name: Run the packed package
         run: |
           # No glob on the path: on Windows $RUNNER_TEMP has backslashes
