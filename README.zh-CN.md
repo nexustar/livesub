@@ -16,7 +16,7 @@ npm install -g livesub@next
 livesub
 ```
 
-打开 <http://localhost:8000>，按提示下载语音模型，选择 **麦克风** 或
+打开 <http://localhost:1222>，按提示下载语音模型，选择 **麦克风** 或
 **标签页**，然后点击 **开始**。**弹出** 会把字幕放进一个置顶的小窗口，可以
 摆在视频上方。界面语言跟随浏览器（中文或英文），可以在 **设置 → 显示** 中修改。
 
@@ -63,12 +63,30 @@ livesub 时所在的目录读取。全部选项见安装包中的 `.env.example`
 下载慢时可以设置 `HF_ENDPOINT` 使用 Hugging Face 镜像（例如
 `HF_ENDPOINT=https://hf-mirror.com`），翻译模型的镜像用 `MT_ENDPOINT` 设置。
 
-livesub 默认监听 `127.0.0.1:8000`。想在手机等其他设备上看字幕，用
-`livesub --host 0.0.0.0` 启动，然后访问 `http://<这台电脑的 IP>:8000`；此时同一
+livesub 默认监听 `127.0.0.1:1222`。想在手机等其他设备上看字幕，用
+`livesub --host 0.0.0.0` 启动，然后访问 `http://<这台电脑的 IP>:1222`；此时同一
 网络里的任何人都能使用它，包括你的 API key。`--port` 可以换端口。
 
 本地语音识别支持 macOS 13.3+、Linux（x86-64 需支持 AVX2，或 arm64；
 glibc 2.28+）和 Windows（x86-64，需支持 AVX2）。其他系统请使用云端后端。
+
+## 桌面版（预览）
+
+同样的字幕，放在独立的应用里，并多了两样浏览器做不到的事：**系统声音** 采集
+这台电脑播放的任何声音（任何应用，不限于浏览器标签页）；**弹出** 会打开一个
+无边框、透明的字幕悬浮窗，可以盖在全屏视频上。拖动任意位置即可移动；勾选
+**鼠标穿透**（在 **收回** 旁边）后，点击会穿过
+悬浮窗落到下面的窗口上。
+
+系统声音支持 macOS 14.2+ 和 Windows；Linux 上请用麦克风配合 PulseAudio 或
+PipeWire 的 monitor。桌面版从自己的设置文件夹读取 `.env`（**设置 → 打开设置
+文件夹**，改完后点旁边的 **重启服务**），下载的模型和命令行版的 livesub 共用。
+
+从 [Releases](https://github.com/nexustar/livesub/releases) 下载：macOS（Apple
+Silicon）、Windows（x64）和 Linux（x64 AppImage）。安装包暂未签名，打开方法见
+Release 说明。克隆源码后（见下文），用 `npm run desktop` 运行，用
+`npm run desktop:dist` 在 `release/` 中生成安装包（其他架构加 `-- --x64` 或
+`-- --arm64`）。
 
 ## 从源码运行
 

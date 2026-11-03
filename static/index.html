@@ -18,7 +18,7 @@
 </head>
 <body>
   <div id="controls">
-    <button id="toggle"><span class="icon">▶</span><span class="label">Start</span></button>
+    <button id="toggle"><span class="icon">▶</span><span class="label"><span class="label-start">Start</span><span class="label-stop">Stop</span></span></button>
     <!-- Options can't hold SVG: the icon for the picked source sits over the
          select's left padding (app.js sets data-source). -->
     <span id="input-source-picker">
@@ -34,15 +34,24 @@
         <circle cx="3.9" cy="4.25" r="0.6" fill="currentColor" stroke="none"/>
         <circle cx="5.9" cy="4.25" r="0.6" fill="currentColor" stroke="none"/>
       </svg>
+      <svg class="icon icon-system" viewBox="0 0 16 16" width="1em" height="1em" aria-hidden="true"
+           fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round">
+        <path d="M2 6h2.5L8 3v10L4.5 10H2z"/>
+        <path d="M10.5 5.5a3.5 3.5 0 0 1 0 5M12.5 3.5a6.3 6.3 0 0 1 0 9"/>
+      </svg>
+      <!-- Tab in the browser, System audio in the desktop app (app.js
+           removes the other). -->
       <select id="input-source" title="Audio source" data-i18n-title>
         <option value="mic" data-i18n>Mic</option>
         <option value="screen" data-i18n>Tab</option>
+        <option value="system" data-i18n>System audio</option>
       </select>
     </span>
-    <span id="status">idle</span>
+    <!-- The meter before the status: the status text changes length. -->
     <div id="vu" title="audio level" data-i18n-title>
       <div id="vu-fill"></div>
     </div>
+    <span id="status">idle</span>
     <span class="spacer"></span>
     <span class="badge" id="badge-mic" title="last audio peak (0-32767)">peak —</span>
     <span class="badge" id="badge-asr" title="ASR session count">asr 0</span>
@@ -55,7 +64,8 @@
         <path stroke-width="2.2" d="M13 8H15M11.54 11.54L12.95 12.95M8 13V15M4.46 11.54L3.05 12.95M3 8H1M4.46 4.46L3.05 3.05M8 3V1M11.54 4.46L12.95 3.05"/>
       </svg><span class="label" data-i18n>Settings</span>
     </button>
-    <!-- Only where Document Picture-in-Picture exists (Chrome / Edge). -->
+    <!-- Only where Document Picture-in-Picture exists (Chrome / Edge), or
+         in the desktop app. -->
     <button id="pip" class="secondary" title="Show captions in an always-on-top window" data-i18n-title hidden>
       <!-- The usual picture-in-picture glyph: a small window in a large one. -->
       <svg class="icon" viewBox="0 0 16 16" width="1em" height="1em" aria-hidden="true">
@@ -173,6 +183,12 @@
       <div id="mt-models-list"></div>
     </div>
     <p id="models-dir" class="hint row span2" hidden></p>
+    <!-- Desktop app only. -->
+    <p id="desktop-config" class="hint row span2" hidden>
+      <span data-i18n>API keys go in .env in the settings folder; after editing it, restart the server.</span>
+      <button type="button" class="secondary" id="open-config-dir" data-i18n>Open settings folder</button>
+      <button type="button" class="secondary" id="restart-server" data-i18n>Restart server</button>
+    </p>
     </div>
     <div class="settings-tab" role="tabpanel" data-tab="display">
     <div class="row">
@@ -227,6 +243,11 @@
   <div id="pip-note" hidden>
     <span data-i18n>Captions are in the pop-out window.</span>
     <button type="button" class="secondary" id="pip-return" data-i18n>Bring back</button>
+    <!-- Desktop app only: clicks go through the overlay to what's below. -->
+    <label id="click-through-row" hidden>
+      <input id="click-through" type="checkbox">
+      <span data-i18n>Click-through</span>
+    </label>
   </div>
 
   <script src="static/app.js" type="module"></script>

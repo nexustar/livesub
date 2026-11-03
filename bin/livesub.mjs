@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 
 const HELP = `Usage: livesub [--host ADDR] [--port N] [--help | --version]
 
-Starts the caption server on http://127.0.0.1:8000. Settings are read from
+Starts the caption server on http://127.0.0.1:1222. Settings are read from
 .env and livesub.toml in the current directory (or LIVESUB_CONFIG_DIR);
 downloaded models are kept in the platform data dir (or LIVESUB_DATA_DIR).
 

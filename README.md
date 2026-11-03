@@ -18,7 +18,7 @@ npm install -g livesub@next
 livesub
 ```
 
-Open <http://localhost:8000>, download the speech model when asked, pick
+Open <http://localhost:1222>, download the speech model when asked, pick
 **Mic** or **Tab** and press **Start**. **Pop out** moves the
 captions into a small always-on-top window you can place over the video.
 The interface follows your browser's language (English or Chinese); change
@@ -73,14 +73,35 @@ option. Models are downloaded to the platform data dir (e.g.
 `LIVESUB_DATA_DIR` is set; set `HF_ENDPOINT` to use a Hugging Face
 mirror, and `MT_ENDPOINT` for a mirror of the translation models.
 
-livesub listens on `127.0.0.1:8000`. To open the captions on another
+livesub listens on `127.0.0.1:1222`. To open the captions on another
 device, such as a phone, start it with `livesub --host 0.0.0.0` and visit
-`http://<this computer's IP>:8000`; anyone on that network can then use
+`http://<this computer's IP>:1222`; anyone on that network can then use
 it, and your API keys. `--port` picks another port.
 
 Local speech-to-text runs on macOS 13.3+, on Linux (x86-64 with AVX2 or
 arm64, glibc 2.28+) and on Windows (x86-64 with AVX2). Elsewhere, use a
 cloud backend.
+
+## Desktop app (preview)
+
+The same captions in an app of its own, with two things a browser can't
+do: **System audio** captures whatever the computer plays (any app, not
+just a browser tab), and **Pop out** opens a frameless, transparent
+caption overlay that stays on top of full-screen video. Drag it anywhere to
+move it; **Click-through** (next to **Bring back**) lets clicks
+reach what's below.
+
+System audio works on macOS 14.2+ and Windows; on Linux, use Mic with a
+PulseAudio or PipeWire monitor. The app reads `.env` from its settings
+folder (**Settings → Open settings folder**; then **Restart server**
+beside it), and shares downloaded models with the command-line livesub.
+
+Download it from [Releases](https://github.com/nexustar/livesub/releases):
+macOS (Apple Silicon), Windows (x64) and Linux (x64 AppImage). The
+installers aren't signed yet; the release notes say how to open them. From
+a clone (see below), `npm run desktop` runs it and `npm run desktop:dist`
+builds an installer into `release/` (add `-- --x64` or `-- --arm64` for
+another arch).
 
 ## Running from source
 

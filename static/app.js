@@ -31,10 +31,17 @@ const badgeTranslateEl = document.getElementById("badge-translate");
 const debugModeInput = document.getElementById("debug-mode");
 const fontLargeInput = document.getElementById("font-large");
 const uiLangSel = document.getElementById("ui-lang");
+// The desktop app's extras (desktop/preload.cjs); null in a browser.
+const desktop = window.livesub ?? null;
+// Desktop app: the toolbar is the title bar (main.mjs).
+if (desktop) {
+  document.body.classList.add("desktop-titlebar", `titlebar-${desktop.platform}`);
+}
 // Status as an English key + vars, so a language switch can redo it.
 let statusMsg = ["idle"];
 
 // Interface language; switching re-renders in place (see refreshLanguage).
+if (desktop) uiLangSel.querySelector('option[value="auto"]').dataset.i18n = "Follow system";
 for (const [code, name] of UI_LANGS) uiLangSel.append(new Option(name, code));
 uiLangSel.value = savedUiLang();
 if (!uiLangSel.value) uiLangSel.value = "auto";
@@ -82,6 +89,8 @@ function currentSourceLang() {
     ? sourceLangInput.value : sourceLangSel.value;
   return (v || "auto").trim();
 }
+// The desktop app has no tabs but can capture what the computer plays.
+inputSourceSel.querySelector(`option[value="${desktop ? "screen" : "system"}"]`).remove();
 inputSourceSel.value = localStorage.getItem(LS_INPUT) || "mic";
 if (!inputSourceSel.value) inputSourceSel.value = "mic";  // stale saved value
 // Shows the picked source's icon (CSS keys on it).
@@ -782,7 +791,8 @@ function setStatus(msg, vars) {
 
 function setToggleState(rec) {
   toggleBtn.querySelector(".icon").textContent = rec ? "■" : "▶";
-  toggleBtn.querySelector(".label").textContent = rec ? t("Stop") : t("Start");
+  toggleBtn.querySelector(".label-start").textContent = t("Start");
+  toggleBtn.querySelector(".label-stop").textContent = t("Stop");
   toggleBtn.classList.toggle("recording", rec);
 }
 
@@ -998,6 +1008,7 @@ function applyPrevRevision(sid, text) {
 }
 
 async function acquireStream(source) {
+  if (source === "system") return acquireSystemAudio();
   if (source === "screen") {
     if (!navigator.mediaDevices.getDisplayMedia) {
       throw new Error(t("Tab capture isn't supported in this browser."));
@@ -1054,6 +1065,26 @@ async function acquireStream(source) {
       autoGainControl: true,
     },
   });
+}
+
+// Desktop app: the main process answers getDisplayMedia with loopback audio
+// and this page as the video (desktop/main.mjs), with no picker. Only the
+// audio is kept.
+async function acquireSystemAudio() {
+  setStatus("starting system audio capture…");
+  const captured = await navigator.mediaDevices.getDisplayMedia({
+    video: true,
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+  });
+  captured.getVideoTracks().forEach(t => t.stop());
+  const audioTracks = captured.getAudioTracks();
+  if (audioTracks.length === 0) {
+    captured.getTracks().forEach(t => t.stop());
+    throw new Error(desktop.platform === "linux"
+      ? t("System audio capture isn't available on Linux. Route it through a virtual mic (a PulseAudio or PipeWire monitor) and use Mic.")
+      : t("No audio track delivered."));
+  }
+  return new MediaStream(audioTracks);
 }
 
 async function start() {
@@ -1464,9 +1495,31 @@ new MutationObserver(syncPipBody).observe(document.body, {
   attributes: true, attributeFilter: ["class", "data-translate-backend"],
 });
 
+// In the desktop app, a same-origin about:blank window that the main process
+// makes frameless, transparent and always on top (desktop/main.mjs, which
+// matches it by name); the stack moves into it the same way.
+async function requestPopout() {
+  if (!desktop) {
+    // Fits both cards; a shorter window gets subtitle mode.
+    return window.documentPictureInPicture.requestWindow({ width: 640, height: 260 });
+  }
+  const win = window.open("about:blank", "livesub-popout");
+  if (!win) throw new Error("the pop-out window was refused");
+  win.document.body.classList.add("overlay");
+  // No frame to close it by: a button shown on hover, and Esc.
+  const close = win.document.createElement("button");
+  close.className = "overlay-close secondary";
+  close.textContent = "✕";
+  close.addEventListener("click", () => win.close());
+  win.document.body.append(close);
+  win.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") win.close();
+  });
+  return win;
+}
+
 async function openPip() {
-  // Fits both cards; a shorter window gets subtitle mode.
-  const win = await window.documentPictureInPicture.requestWindow({ width: 640, height: 260 });
+  const win = await requestPopout();
   const link = win.document.createElement("link");
   link.rel = "stylesheet";
   link.href = new URL("static/style.css", document.baseURI).href;
@@ -1487,7 +1540,22 @@ async function openPip() {
   });
 }
 
-if ("documentPictureInPicture" in window) {
+// Desktop app: clicks pass through the overlay. The main process owns the
+// state (the menu changes it too) and reports it back.
+const clickThroughInput = document.getElementById("click-through");
+if (desktop) {
+  document.getElementById("desktop-config").hidden = false;
+  document.getElementById("open-config-dir").addEventListener("click", () => desktop.openConfigDir());
+  document.getElementById("restart-server").addEventListener("click", () => desktop.restartServer());
+  document.getElementById("click-through-row").hidden = false;
+  clickThroughInput.addEventListener("change", () => desktop.setClickThrough(clickThroughInput.checked));
+  desktop.onClickThrough((on) => {
+    clickThroughInput.checked = on;
+    pipWindow?.document.body.classList.toggle("click-through", on);
+  });
+}
+
+if ("documentPictureInPicture" in window || desktop) {
   pipBtn.hidden = false;
   pipBtn.addEventListener("click", async () => {
     if (pipWindow) {
@@ -1524,6 +1592,12 @@ function h(tag, props, ...children) {
 function openSettings(tab) {
   if (settingsPanel.hidden) settingsToggleBtn.click();
   showSettingsTab(tab);
+}
+
+function configDirLink() {
+  const b = h("button", { type: "button", className: "link" }, t("open it"));
+  b.addEventListener("click", () => desktop.openConfigDir());
+  return b;
 }
 
 function settingsLink(text, tab) {
@@ -1573,6 +1647,8 @@ function welcomeNoBackend() {
   return [
     h("h2", {}, t("Speech-to-text isn't available")),
     h("p", {}, noBackendText()),
+    desktop ? h("p", {}, ...tNodes("The desktop app reads .env from its settings folder: {open}, then Settings → Restart server.",
+      { open: configDirLink() })) : "",
     localUnavailable?.reason ? h("p", { className: "muted" }, t("Details: {reason}.", { reason: localUnavailable.reason })) : "",
   ];
 }
@@ -1670,8 +1746,11 @@ function welcomeReady(summary) {
   return [
     h("h2", {}, t("Ready to caption")),
     h("ol", {},
-      h("li", {}, ...tNodes("Pick {mic}, or {tab} for a browser tab (turn on \u201cShare tab audio\u201d).",
-        { mic: h("b", {}, t("Mic")), tab: h("b", {}, t("Tab")) })),
+      desktop
+        ? h("li", {}, ...tNodes("Pick {mic}, or {system} for the sound this computer plays.",
+          { mic: h("b", {}, t("Mic")), system: h("b", {}, t("System audio")) }))
+        : h("li", {}, ...tNodes("Pick {mic}, or {tab} for a browser tab (turn on \u201cShare tab audio\u201d).",
+          { mic: h("b", {}, t("Mic")), tab: h("b", {}, t("Tab")) })),
       h("li", {}, ...tNodes("Press {start}.", { start: h("b", {}, t("Start")) })),
     ),
     translateBackendSel.value === "none" ? "" : h("p", {},

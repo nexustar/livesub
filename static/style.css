@@ -53,6 +53,22 @@ body {
   border-bottom: 1px solid #222;
 }
 
+/* Desktop app: the toolbar is the window's title bar, at the height
+   desktop/main.mjs gives the window buttons. Dragging it moves the window;
+   room is left for the traffic lights (macOS) or the window buttons
+   (Windows, Linux: the titlebar-area env() values describe their overlay). */
+body.desktop-titlebar #controls {
+  height: 46px;
+  padding-top: 0;
+  padding-bottom: 0;
+  -webkit-app-region: drag;
+}
+body.desktop-titlebar #controls :is(button, select, input, #input-source-picker) { -webkit-app-region: no-drag; }
+body.titlebar-darwin #controls { padding-left: 84px; }
+body:is(.titlebar-win32, .titlebar-linux) #controls {
+  padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px);
+}
+
 .spacer { flex: 1; }
 
 /* Form controls don't inherit line-height by default. */
@@ -74,6 +90,13 @@ button {
 }
 button:hover { background: #1d4ed8; }
 button.recording { background: #991b1b; }
+/* Same width recording or not: ▶ and ■ differ, and so do Start and Stop,
+   which share one grid cell, the other one hidden. */
+#toggle .icon { display: inline-block; width: 1em; text-align: center; }
+#toggle .label { display: inline-grid; justify-items: center; }
+#toggle .label > * { grid-area: 1 / 1; }
+#toggle:not(.recording) .label-stop,
+#toggle.recording .label-start { visibility: hidden; }
 button.recording:hover { background: #7f1d1d; }
 button.secondary {
   background: transparent;
@@ -124,7 +147,8 @@ button .icon { line-height: 1; }
   pointer-events: none;
 }
 #input-source-picker:not([data-source="mic"]) .icon-mic,
-#input-source-picker:not([data-source="screen"]) .icon-screen { display: none; }
+#input-source-picker:not([data-source="screen"]) .icon-screen,
+#input-source-picker:not([data-source="system"]) .icon-system { display: none; }
 #input-source-picker:has(select:disabled) .icon { opacity: 0.5; }
 #input-source { padding-left: 26px; }
 
@@ -671,7 +695,58 @@ body[data-translate-backend="none"] .history-item .src {
   gap: 12px;
 }
 #pip-note[hidden] { display: none; }
-body.welcome-shown #pip-note { display: none; }
+#click-through-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: #aaa;
+}
+#click-through-row[hidden] { display: none; }
+#click-through-row input { accent-color: #2563eb; margin: 0; }
+
+/* Desktop app's overlay: frameless and transparent, so the cards float over
+   what's below; dragging anywhere moves the window. */
+html:has(> body.overlay),
+body.overlay { background: transparent; }
+body.overlay {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+/* The close button comes before the stack (app.js), so margin-top: auto
+   puts both at the bottom and the button rides on the cards' top-right
+   corner however tall the window is. */
+body.overlay #caption-stack {
+  border-radius: 10px;
+  margin: 0;
+}
+body.overlay .caption-zone.live { background: rgba(12, 17, 28, 0.78); border-bottom: 0; }
+body.overlay .caption-zone.prev { background: rgba(10, 13, 18, 0.66); border-bottom: 0; }
+body.overlay .caption-zone.prev.entering { animation-name: prev-shift-in-overlay; }
+@keyframes prev-shift-in-overlay {
+  from { transform: translateY(100%); background: rgba(12, 17, 28, 0.78); }
+  to { transform: translateY(0); background: rgba(10, 13, 18, 0.66); }
+}
+body.overlay .overlay-close {
+  -webkit-app-region: no-drag;
+  position: relative;
+  z-index: 3;
+  flex: 0 0 auto;
+  align-self: flex-end;
+  /* Overlaps the stack instead of taking a row above it. */
+  margin: auto 6px -28px 0;
+  height: 22px;
+  padding: 0 7px;
+  font-size: 12px;
+  background: rgba(10, 10, 10, 0.7);
+  opacity: 0;
+  transition: opacity 150ms;
+}
+body.overlay:hover .overlay-close { opacity: 1; }
+/* The LIVE badge sits under the button when there's no previous card. */
+body.overlay:hover .caption-zone.live::before { opacity: 0; }
+/* Clicks pass through then: the button would only tease. */
+body.overlay.click-through .overlay-close { display: none; }
 
 /* ───────── History (takes the rest, scrollable) ───────── */
 

@@ -264,7 +264,7 @@ export const MT_ENDPOINT = env("MT_ENDPOINT", MT_BASE_URL).replace(/\/+$/, "");
 // Port 0 takes a free one.
 export const HOST = env("LIVESUB_HOST").trim() || "127.0.0.1";
 export const PORT = (() => {
-  const raw = env("LIVESUB_PORT", "8000").trim();
+  const raw = env("LIVESUB_PORT", "1222").trim();
   const n = Number(raw);
   if (!/^\d+$/.test(raw) || n > 65535) throw new Error(`LIVESUB_PORT must be 0-65535, got ${JSON.stringify(raw)}`);
   return n;

@@ -1,6 +1,7 @@
 name: Release
 
-# v* tag: check, test the packed package, publish. Manual run: check and test only.
+# v* tag: check, test the packed package, publish to npm, put the desktop
+# installers on a GitHub Release. Manual run: check, test and build only.
 on:
   push:
     tags: ['v*']
@@ -26,7 +27,10 @@ jobs:
         with:
           node-version: 22
 
+      # Electron isn't needed to test the npm package
       - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
 
       - run: npm run typecheck
 
@@ -40,10 +44,53 @@ jobs:
           npm init -y > /dev/null
           npm install "$RUNNER_TEMP/$tgz"
           LIVESUB_DATA_DIR="$RUNNER_TEMP/data" npx livesub > livesub.log 2>&1 &
-          for i in $(seq 30); do curl -sf 127.0.0.1:8000/api/models > models.json && break; sleep 1; done
+          for i in $(seq 30); do curl -sf 127.0.0.1:1222/api/models > models.json && break; sleep 1; done
           cat livesub.log models.json
           grep -q '"available":true' models.json
-          curl -sf 127.0.0.1:8000/ | grep -q 'id="welcome"'
+          curl -sf 127.0.0.1:1222/ | grep -q 'id="welcome"'
+
+  # Desktop installers, unsigned; released by desktop-release on a tag.
+  desktop:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS: Apple Silicon only
+          - { key: mac-arm64, os: macos-15, arch: --arm64 }
+          - { key: win-x64, os: windows-latest, arch: --x64 }
+          - { key: linux-x64, os: ubuntu-latest, arch: --x64 }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - name: Version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
+
+      - name: Build
+        run: npm run desktop:dist -- --publish never ${{ matrix.arch }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.key }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.AppImage
+          if-no-files-found: error
 
   publish:
     needs: test
@@ -65,6 +112,8 @@ jobs:
 
       # Dev dependencies: prepack compiles with tsc
       - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
 
       - name: Publish
         run: |
@@ -75,3 +124,38 @@ jobs:
             *-*) npm publish --access public --tag next ;;
             *)   npm publish --access public ;;
           esac
+
+  # The desktop installers on a GitHub Release for the tag (a prerelease for
+  # vX.Y.Z-*). They are unsigned; the notes say how to open them anyway.
+  desktop-release:
+    needs: desktop
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: release
+          merge-multiple: true
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cat > notes.md <<'NOTES'
+          Desktop app installers. They are not signed yet:
+
+          - **macOS** (Apple Silicon only): open the `.dmg`, drag LiveSub to Applications, then run
+            `xattr -cr /Applications/LiveSub.app` once, or macOS reports the app as damaged.
+          - **Windows**: SmartScreen warns about an unknown publisher; choose *More info* → *Run anyway*.
+          - **Linux** (x86-64): `chmod +x LiveSub-*.AppImage`, then run it.
+
+          Local speech-to-text downloads its model in Settings → Backends on first use.
+          The command-line version is on npm: `npm install -g livesub` (prereleases: `livesub@next`).
+          NOTES
+          case "$GITHUB_REF_NAME" in *-*) pre=--prerelease ;; *) pre= ;; esac
+          gh release create "$GITHUB_REF_NAME" $pre --title "$GITHUB_REF_NAME" --notes-file notes.md \
+              release/*.dmg release/*.zip release/*.exe release/*.AppImage

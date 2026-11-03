@@ -15,6 +15,7 @@ const LOCALES = {
     "Audio source": "音频来源",
     "Mic": "麦克风",
     "Tab": "标签页",
+    "System audio": "系统声音",
     "audio level": "音量",
     "Settings": "设置",
     "Close": "关闭",
@@ -23,6 +24,7 @@ const LOCALES = {
     "Clear": "清空",
     "Captions are in the pop-out window.": "字幕正显示在弹出窗口中。",
     "Bring back": "收回",
+    "Click-through": "鼠标穿透",
 
     // Status line
     "idle": "空闲",
@@ -35,6 +37,7 @@ const LOCALES = {
     "error: {message}; retrying in {s}s…": "错误：{message}；{s} 秒后重试…",
     "requesting mic…": "正在请求麦克风…",
     "pick a tab/window with audio…": "请选择一个有声音的标签页…",
+    "starting system audio capture…": "正在开始采集系统声音…",
     "no speech-to-text backend configured": "没有可用的语音识别后端",
     "download the speech-to-text model first": "请先下载语音识别模型",
     "download the translation models first": "请先下载翻译模型",
@@ -44,6 +47,8 @@ const LOCALES = {
       "Linux Wayland 上的 Firefox 无法采集标签页音频。请改用 Chrome 或 Chromium，或者把系统音频接到 PipeWire 虚拟麦克风后使用“麦克风”。",
     "Pick a tab (not “Entire screen” or “Window”) and turn on “Share tab audio”.":
       "请选择一个标签页（不要选“整个屏幕”或“窗口”），并勾选“分享标签页音频”。",
+    "System audio capture isn't available on Linux. Route it through a virtual mic (a PulseAudio or PipeWire monitor) and use Mic.":
+      "Linux 上无法采集系统声音。请把它接到虚拟麦克风（PulseAudio 或 PipeWire 的 monitor）后使用“麦克风”。",
 
     // Settings tabs
     "Session": "会话",
@@ -139,10 +144,15 @@ const LOCALES = {
     "Source and target are the same language: captions show the transcript.": "源语言和目标语言相同，字幕直接显示转写。",
     "Translation models for {path} ({size})": "需要 {path} 的翻译模型（{size}）",
     "Models from Firefox: {path}": "模型来自 Firefox：{path}",
+    "API keys go in .env in the settings folder; after editing it, restart the server.":
+      "API key 写在设置文件夹里的 .env 中；改完后重启服务。",
+    "Open settings folder": "打开设置文件夹",
+    "Restart server": "重启服务",
 
     // Display tab
     "Interface language": "界面语言",
     "Follow browser": "跟随浏览器",
+    "Follow system": "跟随系统",
     "Large captions": "大字幕",
     "For viewing from a distance.": "适合远距离观看。",
     "Debug mode": "调试模式",
@@ -155,6 +165,9 @@ const LOCALES = {
     "Local speech-to-text isn't supported on this computer yet. Add a cloud API key (e.g. DASHSCOPE_API_KEY) to .env and restart livesub.":
       "这台电脑暂不支持本地语音识别。请在 .env 中添加一个云端 API key（例如 DASHSCOPE_API_KEY），然后重启 livesub。",
     "Details: {reason}.": "详情：{reason}。",
+    "The desktop app reads .env from its settings folder: {open}, then Settings → Restart server.":
+      "桌面版从设置文件夹读取 .env：{open}，改完后点 设置 → 重启服务。",
+    "open it": "打开文件夹",
     "Download a speech model": "下载语音模型",
     "Runs offline on this computer. Pick one:": "在本机离线运行。选择一个：",
     "Runs offline on this computer.": "在本机离线运行。",
@@ -170,6 +183,7 @@ const LOCALES = {
     "Ready to caption": "准备就绪",
     "Pick {mic}, or {tab} for a browser tab (turn on “Share tab audio”).":
       "选择{mic}，或选择{tab}来采集浏览器标签页的声音（勾选“分享标签页音频”）。",
+    "Pick {mic}, or {system} for the sound this computer plays.": "选择{mic}，或选择{system}来采集这台电脑播放的声音。",
     "Press {start}.": "点击{start}。",
     "For better translations, add the topic and key names in {link}.": "在{link}中填写主题和关键名词，翻译会更准确。",
     "Settings → Session": "设置 → 会话",
@@ -185,10 +199,21 @@ export function savedUiLang() {
   return localStorage.getItem(LS_UI_LANG) || "auto";
 }
 
-// "auto" follows the browser: any Chinese locale gets the zh table.
+// "auto": the first of the preferred languages we have (any Chinese gets the
+// zh table), the system's in the desktop app, else the browser's.
+function autoLang() {
+  const prefs = window.livesub?.languages?.length ? window.livesub.languages
+    : navigator.languages?.length ? navigator.languages : [navigator.language];
+  for (const l of prefs) {
+    const m = /^(zh|en)(?:[-_.@]|$)/i.exec(l);
+    if (m) return m[1].toLowerCase();
+  }
+  return "en";
+}
+
 export function setUiLang(pref) {
   localStorage.setItem(LS_UI_LANG, pref);
-  const lang = pref === "auto" ? (/^zh\b/i.test(navigator.language) ? "zh" : "en") : pref;
+  const lang = pref === "auto" ? autoLang() : pref;
   dict = LOCALES[lang] || null;
   document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
   applyI18n(document);

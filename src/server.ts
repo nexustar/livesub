@@ -2,6 +2,7 @@
 // endpoint, and the __main__ startup guard in server.py. Uses node:http + ws
 // directly (no framework), matching the project's "one server file" ethos.
 
+import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
@@ -205,6 +206,23 @@ function hostAllowed(req: IncomingMessage): boolean {
   return isLoopbackHost(h) || ALLOWED_HOSTS.has(h);
 }
 
+// Set by the desktop app, which gives its page the same value as a cookie: then
+// the API and /ws answer that page only, not other programs on this computer.
+// (Not read from .env: this is per launch.)
+const SESSION_TOKEN = process.env.LIVESUB_SESSION_TOKEN ?? "";
+
+function sessionAllowed(req: IncomingMessage): boolean {
+  if (!SESSION_TOKEN) return true;
+  for (const part of (req.headers.cookie ?? "").split(";")) {
+    const eq = part.indexOf("=");
+    if (part.slice(0, eq).trim() !== "livesub_session") continue;
+    const got = Buffer.from(part.slice(eq + 1).trim());
+    const want = Buffer.from(SESSION_TOKEN);
+    return got.length === want.length && timingSafeEqual(got, want);
+  }
+  return false;
+}
+
 function originAllowed(req: IncomingMessage): boolean {
   const origin = req.headers.origin;
   if (!origin) return true;  // not a browser (scripts, curl)
@@ -227,6 +245,12 @@ const httpServer = createServer((req, res) => {
   const safe = req.method === "GET" || req.method === "HEAD";
   if (!hostAllowed(req) || (!safe && !originAllowed(req))) {
     log.warning(`refused ${req.method} ${path} (host ${req.headers.host}, origin ${req.headers.origin})`);
+    res.writeHead(403).end("forbidden");
+    return;
+  }
+
+  if (path.startsWith("/api/") && !sessionAllowed(req)) {
+    log.warning(`refused ${req.method} ${path} (no session token)`);
     res.writeHead(403).end("forbidden");
     return;
   }
@@ -280,7 +304,7 @@ const wss = new WebSocketServer({
   server: httpServer,
   path: "/ws",
   verifyClient: ({ req }: { req: IncomingMessage }) => {
-    const ok = hostAllowed(req) && originAllowed(req);
+    const ok = hostAllowed(req) && originAllowed(req) && sessionAllowed(req);
     if (!ok) log.warning(`refused /ws (host ${req.headers.host}, origin ${req.headers.origin})`);
     return ok;
   },
@@ -466,6 +490,9 @@ httpServer.listen(PORT, HOST, () => {
   const { port } = httpServer.address() as AddressInfo;
   const shown = HOST === "0.0.0.0" || HOST === "::" ? "localhost" : HOST.includes(":") ? `[${HOST}]` : HOST;
   log.info(`livesub listening on http://${shown}:${port}`);
+  // Under the desktop app this runs in an Electron utility process: tell it
+  // the port, so it can open the window.
+  (process as { parentPort?: { postMessage(m: unknown): void } }).parentPort?.postMessage({ type: "listening", port });
   if (!isLoopbackHost(HOST)) {
     log.warning(`listening on ${HOST}: anyone who can reach port ${port} can use this server and its API keys`);
   }

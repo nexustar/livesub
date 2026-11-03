@@ -11,7 +11,7 @@ const WAV = process.argv[2] ?? "/tmp/test16k.wav";
 const pcm = readFileSync(WAV).subarray(44); // 16k mono s16le payload
 console.log(`streaming ${(pcm.length / 32000).toFixed(1)}s of audio at realtime`);
 
-const ws = new WebSocket("ws://127.0.0.1:8000/ws");
+const ws = new WebSocket("ws://127.0.0.1:1222/ws");
 const parts = [];
 
 ws.on("open", () => {

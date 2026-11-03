@@ -1,0 +1,53 @@
+# Desktop app packaging (npm run desktop:dist). Not part of the npm package.
+appId: io.github.nexustar.livesub
+productName: LiveSub
+# Only in the app: in package.json, npm would ship desktop/ with the package.
+extraMetadata:
+  main: desktop/main.mjs
+directories:
+  output: release
+  buildResources: desktop/build
+# Unpacked: the server spawns quickasr from node_modules and runs the
+# translation engine (WASM) in a worker thread, neither of which works from
+# inside an asar archive.
+asar: false
+# The app can't be used as a plain Node runtime or a debug target. Not
+# onlyLoadAppFromAsar: there is no asar.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  # Flipping fuses breaks the signature, and Apple Silicon kills an app without
+  # one; unsigned builds (CI) need this ad-hoc one. Signed builds sign after.
+  resetAdHocDarwinSignature: true
+files:
+  - package.json
+  - desktop/*.{mjs,cjs}
+  - dist/**/*.js
+  - static/**
+  - vendor/**
+  - .env.example
+# One installer per arch (electron-builder --arm64 / --x64), each with only
+# its own quickasr binary package, fetched first when npm installed another.
+beforePack: desktop/build/before-pack.cjs
+afterPack: desktop/build/after-pack.cjs
+mac:
+  target: [dmg, zip]
+  category: public.app-category.productivity
+  icon: static/icon-512.png
+  hardenedRuntime: true
+  entitlements: desktop/build/entitlements.mac.plist
+  entitlementsInherit: desktop/build/entitlements.mac.plist
+  extendInfo:
+    NSMicrophoneUsageDescription: LiveSub captions what the microphone hears.
+    NSAudioCaptureUsageDescription: LiveSub captions the sound this computer plays.
+win:
+  target: nsis
+  icon: static/icon-512.png
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+linux:
+  target: AppImage
+  category: AudioVideo
+  icon: static/icon-512.png
