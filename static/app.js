@@ -1072,17 +1072,25 @@ async function acquireStream(source) {
 // audio is kept.
 async function acquireSystemAudio() {
   setStatus("starting system audio capture…");
-  const captured = await navigator.mediaDevices.getDisplayMedia({
-    video: true,
-    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-  });
+  // Linux loopback needs PulseAudio or pipewire-pulse; without it Chromium
+  // may reject the request or deliver no audio track.
+  const linuxHint = () => new Error(
+    t("Couldn't capture system audio. On Linux it needs PulseAudio or PipeWire with pipewire-pulse; otherwise route a monitor into a virtual mic and use Mic."));
+  let captured;
+  try {
+    captured = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+  } catch (e) {
+    if (desktop.platform === "linux") throw linuxHint();
+    throw e;
+  }
   captured.getVideoTracks().forEach(t => t.stop());
   const audioTracks = captured.getAudioTracks();
   if (audioTracks.length === 0) {
     captured.getTracks().forEach(t => t.stop());
-    throw new Error(desktop.platform === "linux"
-      ? t("System audio capture isn't available on Linux. Route it through a virtual mic (a PulseAudio or PipeWire monitor) and use Mic.")
-      : t("No audio track delivered."));
+    throw desktop.platform === "linux" ? linuxHint() : new Error(t("No audio track delivered."));
   }
   return new MediaStream(audioTracks);
 }
@@ -1150,8 +1158,9 @@ async function start() {
     connect();
   } catch (err) {
     console.error(err);
-    setStatus("error: {message}", { message: err.message });
+    // stop() resets the status to idle, so report the error after it.
     await stop();
+    setStatus("error: {message}", { message: err.message });
   }
 }
 

@@ -23,6 +23,10 @@ const ENV_FILE = join(CONFIG_DIR, ".env");
 const STATE_FILE = join(CONFIG_DIR, "desktop.json");
 const LOG_FILE = join(CONFIG_DIR, "server.log");
 
+// Linux system audio: Chromium's loopback (the default sink's monitor, via
+// PulseAudio or pipewire-pulse) is behind this feature. Before ready.
+if (process.platform === "linux") app.commandLine.appendSwitch("enable-features", "PulseaudioLoopbackForScreenShare");
+
 // Native menu text; the page has its own (static/i18n.js).
 const MENU_ZH = {
   "File": "文件",
@@ -357,8 +361,9 @@ function setupSession() {
   // itself, which needs no screen-recording permission (a screen would).
   ses.setDisplayMediaRequestHandler((request, callback) => {
     if (!request.frame || !isOwnPage(request.frame.url) || !request.audioRequested) return callback(null);
-    // No loopback on Linux: the page gets no audio track and says so.
-    callback(process.platform === "linux" ? { video: request.frame } : { video: request.frame, audio: "loopback" });
+    // Where loopback isn't there (Linux without PulseAudio or pipewire-pulse)
+    // the page gets no audio track and says so.
+    callback({ video: request.frame, audio: "loopback" });
   });
 }
 
