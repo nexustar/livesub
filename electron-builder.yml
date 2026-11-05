@@ -32,7 +32,7 @@ files:
 beforePack: desktop/build/before-pack.cjs
 afterPack: desktop/build/after-pack.cjs
 mac:
-  target: [dmg, zip]
+  target: dmg
   category: public.app-category.productivity
   icon: static/icon-512.png
   hardenedRuntime: true

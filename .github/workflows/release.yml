@@ -87,7 +87,6 @@ jobs:
           name: desktop-${{ matrix.key }}
           path: |
             release/*.dmg
-            release/*.zip
             release/*.exe
             release/*.AppImage
           if-no-files-found: error
@@ -158,4 +157,4 @@ jobs:
           NOTES
           case "$GITHUB_REF_NAME" in *-*) pre=--prerelease ;; *) pre= ;; esac
           gh release create "$GITHUB_REF_NAME" $pre --title "$GITHUB_REF_NAME" --notes-file notes.md \
-              release/*.dmg release/*.zip release/*.exe release/*.AppImage
+              release/*.dmg release/*.exe release/*.AppImage
