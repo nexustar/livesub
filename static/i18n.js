@@ -47,8 +47,8 @@ const LOCALES = {
       "Linux Wayland 上的 Firefox 无法采集标签页音频。请改用 Chrome 或 Chromium，或者把系统音频接到 PipeWire 虚拟麦克风后使用“麦克风”。",
     "Pick a tab (not “Entire screen” or “Window”) and turn on “Share tab audio”.":
       "请选择一个标签页（不要选“整个屏幕”或“窗口”），并勾选“分享标签页音频”。",
-    "System audio capture isn't available on Linux. Route it through a virtual mic (a PulseAudio or PipeWire monitor) and use Mic.":
-      "Linux 上无法采集系统声音。请把它接到虚拟麦克风（PulseAudio 或 PipeWire 的 monitor）后使用“麦克风”。",
+    "Couldn't capture system audio. On Linux it needs PulseAudio or PipeWire with pipewire-pulse; otherwise route a monitor into a virtual mic and use Mic.":
+      "无法采集系统声音。Linux 上需要 PulseAudio，或带 pipewire-pulse 的 PipeWire；否则请把 monitor 接到虚拟麦克风后使用“麦克风”。",
 
     // Settings tabs
     "Session": "会话",
