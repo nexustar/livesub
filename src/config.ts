@@ -345,9 +345,13 @@ export const VOXTRAL_INTERVAL_SEC = envFloat("VOXTRAL_INTERVAL_SEC", "2.0");
 
 // Two qwen3-asr variants ship in the same binary; only the model dir differs.
 // Each is either external (its env var names a dir the user manages) or
-// managed (livesub downloads it into DATA_DIR/models/). Revisions are pinned
-// so the sizes and checksums below stay valid; sha256 is only published for
-// the LFS weight files, the small files are checked by size.
+// managed (livesub downloads it into DATA_DIR/models/). Managed models are
+// Qwen3-ASR quantized to int8 by `quickasr quantize` (needs quickasr 0.4):
+// as accurate as the original bf16 weights when streaming, 40% smaller and
+// lighter on memory. A complete bf16 download from before (`legacy`) is still
+// used until the int8 one is there. Revisions are pinned so the sizes and
+// checksums below stay valid; sha256 is only published for the LFS weight
+// files, the small files are checked by size.
 export interface QwenModelFile {
   name: string;
   size: number;
@@ -362,6 +366,7 @@ export interface QwenModel {
   envName: string;
   envDir: string;
   files: QwenModelFile[];
+  legacy: { dirName: string; files: QwenModelFile[] };
 }
 const QWEN_TOKENIZER_FILES: QwenModelFile[] = [
   { name: "vocab.json", size: 2776833 },
@@ -371,34 +376,54 @@ export const QWEN_MODELS: QwenModel[] = [
   {
     id: "qwen-small",
     label: "Qwen3-ASR 0.6B",
-    repo: "Qwen/Qwen3-ASR-0.6B",
-    revision: "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
-    dirName: "qwen3-asr-0.6b",
+    repo: "quickasr/Qwen3-ASR-0.6B-q8",
+    revision: "2d9de61dfc9edfdf610e27bad2cb5877d3fab929",
+    dirName: "qwen3-asr-0.6b-q8",
     envName: "QWEN_ASR_MODEL_DIR_SMALL",
     envDir: env("QWEN_ASR_MODEL_DIR_SMALL", ""),
     files: [
       { name: "config.json", size: 6193 },
       { name: "generation_config.json", size: 142 },
       ...QWEN_TOKENIZER_FILES,
-      { name: "model.safetensors", size: 1876091704, sha256: "79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea" },
+      { name: "model.safetensors", size: 1179589432, sha256: "ffb3d12c5d2766aa00a65455f20031917210f97cdc64b811835f60adbeeaa17e" },
     ],
+    // Qwen/Qwen3-ASR-0.6B@5eb14417
+    legacy: {
+      dirName: "qwen3-asr-0.6b",
+      files: [
+        { name: "config.json", size: 6193 },
+        { name: "generation_config.json", size: 142 },
+        ...QWEN_TOKENIZER_FILES,
+        { name: "model.safetensors", size: 1876091704 },
+      ],
+    },
   },
   {
     id: "qwen-large",
     label: "Qwen3-ASR 1.7B",
-    repo: "Qwen/Qwen3-ASR-1.7B",
-    revision: "7278e1e70fe206f11671096ffdd38061171dd6e5",
-    dirName: "qwen3-asr-1.7b",
+    repo: "quickasr/Qwen3-ASR-1.7B-q8",
+    revision: "25e43984d83085eb34285e8220a7dcc34c682333",
+    dirName: "qwen3-asr-1.7b-q8",
     envName: "QWEN_ASR_MODEL_DIR_LARGE",
     envDir: env("QWEN_ASR_MODEL_DIR_LARGE", ""),
     files: [
       { name: "config.json", size: 6194 },
       { name: "generation_config.json", size: 142 },
       ...QWEN_TOKENIZER_FILES,
-      { name: "model.safetensors.index.json", size: 64821 },
-      { name: "model-00001-of-00002.safetensors", size: 4220320824, sha256: "a4cd1f1a04d90b757dc7f7dd26254e69a013b19e80efe590a83c6a3bde8608d6" },
-      { name: "model-00002-of-00002.safetensors", size: 478200688, sha256: "6e0b9d9e09e2e0238e7ef3cc8a484ab387e91b90f1900bedf88bc92d7929ccfc" },
+      { name: "model.safetensors", size: 2843081416, sha256: "40f97a110e09503feae71eb47cd913e65db2079bcb6359aca7ccfea6b8bddc4e" },
     ],
+    // Qwen/Qwen3-ASR-1.7B@7278e1e7
+    legacy: {
+      dirName: "qwen3-asr-1.7b",
+      files: [
+        { name: "config.json", size: 6194 },
+        { name: "generation_config.json", size: 142 },
+        ...QWEN_TOKENIZER_FILES,
+        { name: "model.safetensors.index.json", size: 64821 },
+        { name: "model-00001-of-00002.safetensors", size: 4220320824 },
+        { name: "model-00002-of-00002.safetensors", size: 478200688 },
+      ],
+    },
   },
 ];
 
@@ -476,9 +501,32 @@ export function qwenModel(backendId: string): QwenModel | null {
   return QWEN_MODELS.find((m) => m.id === backendId) ?? null;
 }
 
-// Absolute model dir: the env-configured dir when set, else the managed one.
+// Where livesub downloads a managed model.
+export function qwenManagedDir(m: QwenModel): string {
+  return join(DATA_DIR, "models", m.dirName);
+}
+
+function filesReady(dir: string, files: QwenModelFile[]): boolean {
+  return files.every((f) => {
+    try {
+      return statSync(join(dir, f.name)).size === f.size;
+    } catch {
+      return false;
+    }
+  });
+}
+
+// The bf16 download from before int8, while the int8 one isn't complete.
+function qwenLegacyDir(m: QwenModel): string | null {
+  if (m.envDir || filesReady(qwenManagedDir(m), m.files)) return null;
+  const dir = join(DATA_DIR, "models", m.legacy.dirName);
+  return filesReady(dir, m.legacy.files) ? dir : null;
+}
+
+// Absolute model dir: the env-configured dir when set, else the managed one
+// (or the bf16 one from before, see qwenLegacyDir).
 export function qwenModelDir(m: QwenModel): string {
-  return m.envDir ? resolveRel(m.envDir) : join(DATA_DIR, "models", m.dirName);
+  return m.envDir ? resolveRel(m.envDir) : (qwenLegacyDir(m) ?? qwenManagedDir(m));
 }
 
 export function qwenBinAvailable(): boolean {
@@ -497,15 +545,8 @@ export function qwenUnavailable(): { kind: "config" | "platform"; reason: string
 // every file at its full size (downloads land as .part and are renamed only
 // once verified, so this also excludes one in progress).
 export function qwenModelReady(m: QwenModel): boolean {
-  const dir = qwenModelDir(m);
-  if (m.envDir) return existsSync(dir);
-  return m.files.every((f) => {
-    try {
-      return statSync(join(dir, f.name)).size === f.size;
-    } catch {
-      return false;
-    }
-  });
+  if (m.envDir) return existsSync(qwenModelDir(m));
+  return filesReady(qwenManagedDir(m), m.files) || qwenLegacyDir(m) !== null;
 }
 
 // Translate dropdown contents — registry filtered by env availability.

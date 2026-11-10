@@ -12,7 +12,7 @@ import { PassThrough, Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createZstdDecompress } from "node:zlib";
 
-import { DATA_DIR, HF_ENDPOINT, MT_ENDPOINT, QWEN_MODELS, qwenDevices, qwenModel, qwenModelDir, qwenModelReady, qwenUnavailable } from "./config.js";
+import { DATA_DIR, HF_ENDPOINT, MT_ENDPOINT, QWEN_MODELS, qwenDevices, qwenManagedDir, qwenModel, qwenModelDir, qwenModelReady, qwenUnavailable } from "./config.js";
 import { mtModelById, mtModelDir, mtModelId, mtModelReady, mtRoute } from "./mt.js";
 import { MT_MODELS, MT_RECORDS_URL, type MtModel } from "./mt-models.js";
 import { log } from "./util.js";
@@ -43,7 +43,7 @@ function qwenDownload(id: string): Download | null {
   return {
     id: m.id,
     label: `${m.repo}@${m.revision.slice(0, 8)}`,
-    dir: qwenModelDir(m),
+    dir: qwenManagedDir(m),
     files: m.files.map((f) => ({ ...f, url: `${HF_ENDPOINT}/${m.repo}/resolve/${m.revision}/${f.name}` })),
     zstd: false,
     ready: () => qwenModelReady(m),
@@ -291,6 +291,9 @@ export function deleteModel(id: string): string | null {
   }
   if (jobs.has(id)) return "download in progress; cancel it first";
   rmSync(d.dir, { recursive: true, force: true });
+  // And the bf16 download from before int8, which would otherwise stay in use.
+  const q = qwenModel(id);
+  if (q) rmSync(join(DATA_DIR, "models", q.legacy.dirName), { recursive: true, force: true });
   lastError.delete(id);
   log.info(`model deleted: ${d.id}`);
   return null;
