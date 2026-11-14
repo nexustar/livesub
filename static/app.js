@@ -943,6 +943,19 @@ function promoteReady() {
   }
 }
 
+// Follow the newest item unless the user scrolled up. Tracked from scrolling,
+// not measured on append: hidden history or a revised item would break it.
+let historyFollow = true;
+historyEl.addEventListener("scroll", () => {
+  if (historyEl.clientHeight === 0) return; // hidden
+  historyFollow = historyEl.scrollHeight - historyEl.clientHeight - historyEl.scrollTop < 4;
+});
+function pinHistory() {
+  if (historyFollow) historyEl.scrollTop = historyEl.scrollHeight;
+}
+// Shown again or resized.
+new ResizeObserver(pinHistory).observe(historyEl);
+
 function appendToHistory(s) {
   const item = document.createElement("div");
   item.className = "history-item";
@@ -956,13 +969,8 @@ function appendToHistory(s) {
   item.append(srcDiv, dstDiv);
   // Append (not prepend) so DOM order is chronological — copy-paste then
   // gives oldest→newest, matching the visual top-to-bottom reading order.
-  // Anchor scroll: if the user was already at the bottom, follow the
-  // newest item; otherwise leave their scroll position alone so they can
-  // keep reading older entries without being yanked away.
-  const wasAtBottom =
-    historyEl.scrollHeight - historyEl.clientHeight - historyEl.scrollTop < 4;
   historyEl.append(item);
-  if (wasAtBottom) historyEl.scrollTop = historyEl.scrollHeight;
+  pinHistory();
 }
 
 function applyPrevRevision(sid, text) {
@@ -994,6 +1002,7 @@ function applyPrevRevision(sid, text) {
     const dstEl = item.querySelector(".dst");
     if (dstEl) {
       dstEl.textContent = text.trim();
+      pinHistory();
       dstEl.classList.add("revised");
       setTimeout(() => {
         dstEl.classList.remove("revised");
@@ -1466,6 +1475,7 @@ toggleBtn.addEventListener("click", () => {
 
 clearBtn.addEventListener("click", () => {
   historyEl.innerHTML = "";
+  historyFollow = true;
   sentences.clear();
   transcriptEl.textContent = "";
   translationEl.textContent = "";
