@@ -9,6 +9,8 @@ Qwen3-ASR, which holds up even over background music; translation is
 your choice of a cloud model, a local LLM, Firefox's offline translation
 models, or none.
 
+![livesub showing English speech with Chinese captions](docs/screenshot.png)
+
 ## Quick start
 
 Needs Node.js 22.15+ and Chrome or Edge (for capturing tab audio).
@@ -23,6 +25,10 @@ Open <http://localhost:1222>, download the speech model when asked, pick
 captions into a small always-on-top window you can place over the video.
 The interface follows your browser's language (English or Chinese); change
 it in **Settings → Display**.
+
+To keep livesub in its own window, install the page as an app: in Chrome
+or Edge use the install button in the address bar, on a phone use **Add to
+Home Screen**. The server still has to be running.
 
 Without any API key, translation runs on your computer with Firefox's
 translation models (pick **Local translation** and download the models for your
